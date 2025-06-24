@@ -16,6 +16,21 @@ function App() {
     console.log('DEPLOYMENT:', process.env.REACT_APP_DEPLOYMENT);
     console.log('VOICE:', process.env.REACT_APP_VOICE);
     // Not logging API_KEY for security reasons
+
+    // Validate environment variables
+    const requiredVars = [
+      'REACT_APP_WEBRTC_URL',
+      'REACT_APP_SESSIONS_URL', 
+      'REACT_APP_API_KEY',
+      'REACT_APP_DEPLOYMENT',
+      'REACT_APP_VOICE'
+    ];
+    
+    const missingVars = requiredVars.filter(varName => !process.env[varName]);
+    if (missingVars.length > 0) {
+      console.error('Missing environment variables:', missingVars);
+      logMessage(`Error: Missing environment variables: ${missingVars.join(', ')}`);
+    }
   }, []);
 
   // Function to log messages to UI
@@ -41,6 +56,8 @@ function App() {
   // Start the session
   const startSession = async () => {
     try {
+      logMessage("Starting session...");
+      
       // WARNING: In production, this should be handled by a secure backend
       // to avoid exposing API keys in the client-side code
       const response = await fetch(process.env.REACT_APP_SESSIONS_URL, {
@@ -56,21 +73,27 @@ function App() {
       });
 
       if (!response.ok) {
-        throw new Error(`API request failed: ${response.status}`);
+        const errorText = await response.text();
+        throw new Error(`API request failed: ${response.status} ${response.statusText}. Response: ${errorText}`);
       }
 
       const data = await response.json();
+      console.log("Session response:", data);
+
+      if (!data.id || !data.client_secret?.value) {
+        throw new Error("Invalid session response: missing session ID or client secret");
+      }
 
       const sessionId = data.id;
       const ephemeralKey = data.client_secret?.value;
-      console.error("Ephemeral key:", ephemeralKey);
+      console.log("Ephemeral key:", ephemeralKey);
 
       // Mask the ephemeral key in the log message
       logMessage("Ephemeral Key Received: ***");
       logMessage("WebRTC Session Id = " + sessionId);
 
       // Set up the WebRTC connection using the ephemeral key
-      initializeWebRTC(ephemeralKey);
+      await initializeWebRTC(ephemeralKey);
     } catch (error) {
       console.error("Error fetching ephemeral key:", error);
       logMessage("Error fetching ephemeral key: " + error.message);
@@ -82,6 +105,24 @@ function App() {
     let peerConnection = new RTCPeerConnection();
     peerConnectionRef.current = peerConnection;
 
+    // Add connection state change handler
+    peerConnection.onconnectionstatechange = () => {
+      logMessage(`WebRTC connection state: ${peerConnection.connectionState}`);
+      console.log("WebRTC connection state:", peerConnection.connectionState);
+    };
+
+    // Add ICE connection state change handler
+    peerConnection.oniceconnectionstatechange = () => {
+      logMessage(`ICE connection state: ${peerConnection.iceConnectionState}`);
+      console.log("ICE connection state:", peerConnection.iceConnectionState);
+    };
+
+    // Add error handler
+    peerConnection.onerror = (error) => {
+      console.error("WebRTC error:", error);
+      logMessage(`WebRTC error: ${error}`);
+    };
+
     // Create audio element for remote audio
     const audioElement = document.createElement('audio');
     audioElement.autoplay = true;
@@ -89,14 +130,17 @@ function App() {
     audioElementRef.current = audioElement;
 
     peerConnection.ontrack = (event) => {
+      logMessage("Received remote audio track");
       audioElement.srcObject = event.streams[0];
     };
 
     // Set up media stream
     try {
+      logMessage("Requesting microphone access...");
       const clientMedia = await navigator.mediaDevices.getUserMedia({ audio: true });
       const audioTrack = clientMedia.getAudioTracks()[0];
       peerConnection.addTrack(audioTrack);
+      logMessage("Added local audio track to peer connection");
 
       // Set up data channel
       const dataChannel = peerConnection.createDataChannel('realtime-channel');
@@ -151,6 +195,12 @@ function App() {
       const offer = await peerConnection.createOffer();
       await peerConnection.setLocalDescription(offer);
 
+      logMessage("Created local offer, sending to Azure OpenAI...");
+      console.log("Local SDP Offer:", offer.sdp);
+      
+      // Validate the local offer
+      validateSDP(offer.sdp, "Local Offer");
+
       const sdpResponse = await fetch(`${process.env.REACT_APP_WEBRTC_URL}?model=${process.env.REACT_APP_DEPLOYMENT}`, {
         method: "POST",
         body: offer.sdp,
@@ -160,14 +210,50 @@ function App() {
         },
       });
 
-      const answer = { type: "answer", sdp: await sdpResponse.text() };
+      // Check if the response is successful
+      if (!sdpResponse.ok) {
+        const errorText = await sdpResponse.text();
+        throw new Error(`SDP request failed: ${sdpResponse.status} ${sdpResponse.statusText}. Response: ${errorText}`);
+      }
+
+      const answerSdp = await sdpResponse.text();
+      logMessage("Received SDP answer from server");
+      console.log("Remote SDP Answer:", answerSdp);
+
+      // Validate the remote answer before using it
+      validateSDP(answerSdp, "Remote Answer");
+
+      const answer = { type: "answer", sdp: answerSdp };
       await peerConnection.setRemoteDescription(answer);
+      logMessage("Successfully set remote description");
       
       setSessionActive(true);
     } catch (error) {
       console.error("Error setting up WebRTC:", error);
       logMessage("Error setting up WebRTC: " + error.message);
     }
+  };
+
+  // Function to validate and debug SDP
+  const validateSDP = (sdp, type) => {
+    if (!sdp) {
+      throw new Error(`${type} SDP is empty or null`);
+    }
+    
+    if (!sdp.trim().startsWith('v=')) {
+      throw new Error(`${type} SDP does not start with 'v=' line. Content: ${sdp.substring(0, 200)}...`);
+    }
+    
+    // Check for required SDP lines
+    const requiredLines = ['v=', 'o=', 's=', 't=', 'm='];
+    const missingLines = requiredLines.filter(line => !sdp.includes(line));
+    
+    if (missingLines.length > 0) {
+      console.warn(`${type} SDP missing lines:`, missingLines);
+    }
+    
+    console.log(`${type} SDP validation passed`);
+    return true;
   };
 
   // Update the session with instructions and tools
