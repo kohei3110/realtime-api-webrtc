@@ -57,6 +57,7 @@ def create_app() -> FastAPI:
     
     # プロキシコントローラー登録
     try:
+        # 依存性注入を使用してコントローラーを作成
         sessions_controller = SessionsProxyController()
         app.include_router(sessions_controller.router)
         logger.info("Sessions proxy controller registered")
