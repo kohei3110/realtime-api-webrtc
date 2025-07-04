@@ -21,6 +21,7 @@
 - **Azure SDK**: azure-storage-blob, azure-openai
 - **コンテナ**: Docker
 - **非同期処理**: asyncio, uvloop
+- **パッケージ管理**: uv (Python package manager)
 
 ## 2. システム要件
 
@@ -1166,27 +1167,59 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# uvのインストール
+RUN pip install uv
+
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
 COPY . .
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "uvloop"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--loop", "uvloop"]
 ```
 
-### 6.2 依存関係 (requirements.txt)
-```
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-websockets==12.0
-aiortc==1.6.0
-azure-storage-blob==12.19.0
-openai==1.3.5
-pydantic==2.5.0
-python-multipart==0.0.6
-uvloop==0.19.0
+### 6.2 依存関係 (pyproject.toml)
+```toml
+[project]
+name = "realtime-api-webrtc-backend"
+version = "1.0.0"
+description = "WebRTC シグナリングサーバー for Azure OpenAI Realtime API"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi==0.104.1",
+    "uvicorn[standard]==0.24.0",
+    "websockets==12.0",
+    "aiortc==1.6.0",
+    "azure-storage-blob==12.19.0",
+    "openai==1.3.5",
+    "pydantic==2.5.0",
+    "python-multipart==0.0.6",
+    "uvloop==0.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.3",
+    "pytest-asyncio==0.21.1",
+    "black==23.11.0",
+    "flake8==6.1.0",
+    "mypy==1.7.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.4.3",
+    "pytest-asyncio>=0.21.1",
+    "black>=23.11.0",
+    "flake8>=6.1.0",
+    "mypy>=1.7.1",
+]
 ```
 
 ### 6.3 環境変数
@@ -1496,7 +1529,27 @@ services:
       - ./logs:/app/logs
 ```
 
-### 11.2 ヘルスチェック実装
+### 11.2 開発環境セットアップ
+```bash
+# プロジェクトのクローン
+git clone <repository-url>
+cd realtime-api-webrtc-backend
+
+# uvでの依存関係インストール
+uv sync
+
+# 開発サーバー起動
+uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# テスト実行
+uv run pytest
+
+# コードフォーマット
+uv run black .
+uv run flake8 .
+```
+
+### 11.3 ヘルスチェック実装
 ```python
 @app.get("/api/v1/health")
 async def health_check():
@@ -1583,7 +1636,53 @@ async def check_blob_storage_health() -> dict:
 
 ## 12. 開発・テスト
 
-### 12.1 単体テスト
+### 12.1 パッケージ管理 (uv)
+
+#### 12.1.1 uvの特徴
+- **高速**: Rustで実装された次世代Pythonパッケージマネージャー
+- **決定論的**: uv.lockファイルによる再現可能なビルド
+- **pip互換**: 既存のPythonエコシステムとの完全互換
+- **仮想環境管理**: プロジェクトごとの独立した環境
+
+#### 12.1.2 基本コマンド
+```bash
+# プロジェクト初期化
+uv init
+
+# 依存関係インストール
+uv sync
+
+# パッケージ追加
+uv add fastapi
+uv add --dev pytest
+
+# パッケージ削除
+uv remove package-name
+
+# 仮想環境でコマンド実行
+uv run python script.py
+uv run pytest
+
+# ロックファイル更新
+uv lock
+
+# 本番環境用インストール（開発依存関係除外）
+uv sync --no-dev
+```
+
+#### 12.1.3 設定ファイル
+
+**pyproject.toml**: メインの設定ファイル
+- プロジェクトメタデータ
+- 依存関係定義
+- ツール設定
+
+**uv.lock**: 決定論的な依存関係ロックファイル
+- 正確なバージョン情報
+- 依存関係ツリー
+- ハッシュによる整合性検証
+
+### 12.2 単体テスト
 ```python
 import pytest
 from fastapi.testclient import TestClient
@@ -1597,13 +1696,13 @@ async def test_azure_openai_integration():
     # Azure OpenAI 統合テスト
 ```
 
-### 12.2 統合テスト
+### 12.3 統合テスト
 - WebRTC E2E テスト
 - Azure サービス統合テスト
 - 音声データ保存・取得テスト
 - 負荷テスト
 
-### 12.3 音声データテスト
+### 12.4 音声データテスト
 ```python
 @pytest.mark.asyncio
 async def test_audio_upload_and_retrieval():
@@ -1626,6 +1725,21 @@ async def test_audio_upload_and_retrieval():
     audio_files = await storage_client.list_session_audio_files("test_session_123")
     assert len(audio_files) > 0
 
+```
+
+### 12.5 テスト実行
+```bash
+# 全テスト実行
+uv run pytest
+
+# 特定のテストファイル実行
+uv run pytest tests/test_audio.py
+
+# カバレッジ付きテスト実行
+uv run pytest --cov=src
+
+# 並列テスト実行
+uv run pytest -n auto
 ```
 
 ## 13. API制限事項
