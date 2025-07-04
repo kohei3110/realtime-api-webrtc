@@ -127,15 +127,16 @@ class RealtimeMessage(BaseModel):
 ```json
 {
   "session_id": "uuid",
-  "status": "active|inactive|terminated",
+  "status": "active|inactive|terminated|expired",
   "created_at": "2024-01-01T00:00:00Z",
   "expires_at": "2024-01-01T01:00:00Z",
   "user_id": "string",
   "model": "gpt-4o-realtime-preview",
   "voice": "alloy",
-  "connection_state": "connected|disconnected|connecting",
+  "connection_state": "connected|disconnected|connecting|failed",
   "audio_files_count": 5,
-  "total_duration": 120.5
+  "total_duration": 120.5,
+  "last_activity": "2024-01-01T00:05:00Z"
 }
 ```
 
@@ -145,7 +146,12 @@ class RealtimeMessage(BaseModel):
   "session_id": "uuid",
   "status": "terminated",
   "terminated_at": "2024-01-01T00:00:00Z",
-  "cleanup_completed": true
+  "cleanup_completed": true,
+  "final_stats": {
+    "total_duration": 1800.5,
+    "audio_files_saved": 25,
+    "total_audio_size": 15728640
+  }
 }
 ```
 
@@ -158,11 +164,20 @@ class RealtimeMessage(BaseModel):
       "status": "active",
       "created_at": "2024-01-01T00:00:00Z",
       "user_id": "string",
-      "model": "gpt-4o-realtime-preview"
+      "model": "gpt-4o-realtime-preview",
+      "voice": "alloy",
+      "connection_state": "connected",
+      "audio_files_count": 5,
+      "total_duration": 120.5
     }
   ],
-  "total_count": 1,
-  "active_count": 1
+  "pagination": {
+    "total_count": 1,
+    "active_count": 1,
+    "limit": 20,
+    "offset": 0,
+    "has_more": false
+  }
 }
 ```
 
@@ -304,7 +319,8 @@ class RealtimeMessageProxy:
     "timestamp_start": "2024-01-01T00:00:00.000Z",
     "timestamp_end": "2024-01-01T00:00:30.500Z",
     "confidence_score": 0.95,
-    "language": "ja-JP"
+    "language": "ja-JP",
+    "transcription": "こんにちは、今日はいい天気ですね。"
   }
 }
 ```
@@ -315,7 +331,10 @@ class RealtimeMessageProxy:
   "audio_id": "uuid",
   "blob_url": "https://storage.blob.core.windows.net/audio-records/user-speech/2024/01/01/{session_id}/{audio_id}.wav",
   "upload_status": "completed",
-  "size_bytes": 1440000
+  "size_bytes": 1440000,
+  "sas_url": "https://storage.blob.core.windows.net/audio-records/...?sv=2023-01-03&se=2024-01-01T01%3A00%3A00Z&sr=b&sp=r&sig=...",
+  "sas_expires_at": "2024-01-01T01:00:00Z",
+  "created_at": "2024-01-01T00:00:00Z"
 }
 ```
 
@@ -323,35 +342,236 @@ class RealtimeMessageProxy:
 **GET** `/api/v1/audio/{audio_id}`
 ```json
 {
-  "audio_id": "string",
-  "session_id": "string",
+  "audio_id": "uuid",
+  "session_id": "uuid",
+  "audio_type": "user_speech",
   "blob_url": "https://storage.blob.core.windows.net/...",
-  "metadata": {...},
-  "created_at": "2024-01-01T00:00:00Z"
+  "sas_url": "https://storage.blob.core.windows.net/...?sv=2023-01-03&se=...",
+  "sas_expires_at": "2024-01-01T01:00:00Z",
+  "size_bytes": 1440000,
+  "metadata": {
+    "duration": 30.5,
+    "format": "wav",
+    "sample_rate": 48000,
+    "channels": 1,
+    "speaker": "user",
+    "timestamp_start": "2024-01-01T00:00:00.000Z",
+    "timestamp_end": "2024-01-01T00:00:30.500Z",
+    "confidence_score": 0.95,
+    "language": "ja-JP",
+    "transcription": "こんにちは、今日はいい天気ですね。"
+  },
+  "created_at": "2024-01-01T00:00:00Z",
+  "last_accessed": "2024-01-01T00:05:00Z"
 }
 ```
 
 **GET** `/api/v1/audio/session/{session_id}`
 ```json
 {
-  "session_id": "string",
-  "total_count": 25,
-  "total_duration": 1800.5,
+  "session_id": "uuid",
+  "summary": {
+    "total_count": 25,
+    "total_duration": 1800.5,
+    "total_size_bytes": 57600000,
+    "user_speech_count": 15,
+    "ai_response_count": 10,
+    "average_duration": 72.02
+  },
   "audio_files": [
     {
-      "audio_id": "string",
+      "audio_id": "uuid",
       "audio_type": "user_speech",
-      "blob_url": "string",
-      "metadata": {...},
+      "blob_url": "https://storage.blob.core.windows.net/...",
+      "sas_url": "https://storage.blob.core.windows.net/...?sv=...",
+      "sas_expires_at": "2024-01-01T01:00:00Z",
+      "size_bytes": 1440000,
+      "metadata": {
+        "duration": 30.5,
+        "format": "wav",
+        "speaker": "user",
+        "timestamp_start": "2024-01-01T00:00:00.000Z",
+        "timestamp_end": "2024-01-01T00:00:30.500Z",
+        "language": "ja-JP"
+      },
       "created_at": "2024-01-01T00:00:00Z"
     }
-  ]
+  ],
+  "pagination": {
+    "limit": 50,
+    "offset": 0,
+    "has_more": false
+  }
 }
 ```
 
 #### 3.3.3 音声データ削除
 **DELETE** `/api/v1/audio/{audio_id}`
+
+**Response**:
+```json
+{
+  "audio_id": "uuid",
+  "deletion_status": "completed",
+  "deleted_at": "2024-01-01T00:30:00Z"
+}
+```
+
 **DELETE** `/api/v1/audio/session/{session_id}`
+
+**Response**:
+```json
+{
+  "session_id": "uuid",
+  "deletion_status": "completed",
+  "deleted_count": 25,
+  "deleted_size_bytes": 57600000,
+  "failed_deletions": [],
+  "deleted_at": "2024-01-01T00:30:00Z"
+}
+```
+
+#### 3.3.4 音声データ統計・分析
+**GET** `/api/v1/audio/stats`
+
+**クエリパラメータ**:
+- `session_id` (string, optional): 特定セッションの統計
+- `user_id` (string, optional): 特定ユーザーの統計
+- `start_date` (string, optional): 集計開始日（YYYY-MM-DD）
+- `end_date` (string, optional): 集計終了日（YYYY-MM-DD）
+- `group_by` (string, optional): グループ化単位
+  - 利用可能値: `day`, `week`, `month`, `session`, `user`
+
+**Response**:
+```json
+{
+  "period": {
+    "start_date": "2024-01-01",
+    "end_date": "2024-01-31",
+    "group_by": "day"
+  },
+  "summary": {
+    "total_files": 1250,
+    "total_duration": 86400.0,
+    "total_size_bytes": 2764800000,
+    "unique_sessions": 150,
+    "unique_users": 75,
+    "average_file_duration": 69.12,
+    "average_session_duration": 576.0
+  },
+  "breakdown": [
+    {
+      "date": "2024-01-01",
+      "file_count": 45,
+      "total_duration": 3240.5,
+      "total_size_bytes": 103596800,
+      "session_count": 8,
+      "user_count": 6
+    }
+  ],
+  "audio_type_breakdown": {
+    "user_speech": {
+      "count": 750,
+      "total_duration": 51840.0,
+      "percentage": 60.0
+    },
+    "ai_response": {
+      "count": 500,
+      "total_duration": 34560.0,
+      "percentage": 40.0
+    }
+  }
+}
+```
+
+### 3.4 ヘルスチェック・監視 API
+
+#### 3.4.1 システム状態
+**GET** `/api/v1/health`
+
+**Response**:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "version": "1.0.0",
+  "uptime_seconds": 86400,
+  "services": {
+    "azure_openai": {
+      "status": "healthy",
+      "response_time_ms": 120,
+      "last_check": "2024-01-01T00:00:00Z"
+    },
+    "blob_storage": {
+      "status": "healthy",
+      "response_time_ms": 45,
+      "last_check": "2024-01-01T00:00:00Z"
+    },
+    "database": {
+      "status": "healthy",
+      "response_time_ms": 12,
+      "last_check": "2024-01-01T00:00:00Z"
+    }
+  },
+  "metrics": {
+    "active_sessions": 25,
+    "total_sessions_today": 150,
+    "audio_files_processed_today": 1250,
+    "storage_usage_percentage": 45.2,
+    "average_response_time_ms": 95
+  }
+}
+```
+
+#### 3.4.2 詳細メトリクス
+**GET** `/api/v1/metrics`
+
+**クエリパラメータ**:
+- `timeframe` (string, optional): 集計期間
+  - 利用可能値: `1h`, `24h`, `7d`, `30d`（デフォルト: `1h`）
+
+**Response**:
+```json
+{
+  "timeframe": "1h",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "system_metrics": {
+    "cpu_usage_percentage": 45.2,
+    "memory_usage_percentage": 67.8,
+    "disk_usage_percentage": 34.1,
+    "network_io_mbps": 125.6
+  },
+  "application_metrics": {
+    "active_sessions": 25,
+    "sessions_created": 45,
+    "sessions_terminated": 38,
+    "webrtc_connections_established": 42,
+    "webrtc_connection_failures": 3,
+    "audio_files_uploaded": 125,
+    "audio_upload_failures": 2,
+    "average_session_duration": 420.5,
+    "average_audio_processing_time_ms": 250
+  },
+  "azure_metrics": {
+    "openai_api_calls": 1250,
+    "openai_api_errors": 15,
+    "openai_average_response_time_ms": 180,
+    "blob_storage_operations": 250,
+    "blob_storage_errors": 2,
+    "storage_bandwidth_mbps": 45.2
+  },
+  "error_metrics": {
+    "total_errors": 20,
+    "error_rate_percentage": 1.6,
+    "error_breakdown": {
+      "authentication_errors": 5,
+      "azure_api_errors": 10,
+      "storage_errors": 3,
+      "validation_errors": 2
+    }
+  }
+}
+```
 
 ## 4. WebRTC プロキシ実装詳細
 
@@ -661,7 +881,8 @@ class RealtimeSessionManager:
             voice=request.voice,
             status="created",
             created_at=datetime.utcnow(),
-            expires_at=azure_session.expires_at
+            expires_at=azure_session.expires_at,
+            last_activity=datetime.utcnow()
         )
         
         self.sessions[azure_session.id] = proxy_session
@@ -737,7 +958,7 @@ class AudioBlobStorageClient:
         date_path = timestamp.strftime("%Y/%m/%d")
         return f"{audio_type}/{date_path}/{session_id}/{audio_id}.wav"
     
-    async def upload_audio(self, audio_data: bytes, session_id: str, audio_type: str, metadata: dict) -> str:
+    async def upload_audio(self, audio_data: bytes, session_id: str, audio_type: str, metadata: dict) -> dict:
         """ユーザー発話音声データのアップロード"""
         audio_id = str(uuid.uuid4())
         timestamp = datetime.utcnow()
@@ -758,6 +979,7 @@ class AudioBlobStorageClient:
             "sample_rate": str(metadata.get("sample_rate", 48000)),
             "speaker": metadata.get("speaker", "user"),
             "language": metadata.get("language", "ja-JP"),
+            "transcription": metadata.get("transcription", ""),
             "content_type": "audio/wav"
         }
         
@@ -769,7 +991,36 @@ class AudioBlobStorageClient:
             content_settings=ContentSettings(content_type="audio/wav")
         )
         
-        return blob_client.url
+        # SAS URL生成
+        sas_url = await self.generate_sas_url(blob_name, expiry_hours=1)
+        
+        return {
+            "audio_id": audio_id,
+            "blob_url": blob_client.url,
+            "sas_url": sas_url,
+            "sas_expires_at": (datetime.utcnow() + timedelta(hours=1)).isoformat(),
+            "upload_status": "completed",
+            "size_bytes": len(audio_data),
+            "created_at": timestamp.isoformat()
+        }
+    
+    async def generate_sas_url(self, blob_name: str, expiry_hours: int = 1) -> str:
+        """SAS URLの生成"""
+        blob_client = self.blob_service_client.get_blob_client(
+            container=self.container_name,
+            blob=blob_name
+        )
+        
+        sas_token = generate_blob_sas(
+            account_name=blob_client.account_name,
+            container_name=blob_client.container_name,
+            blob_name=blob_client.blob_name,
+            account_key=os.getenv("AZURE_STORAGE_KEY"),
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.utcnow() + timedelta(hours=expiry_hours)
+        )
+        
+        return f"{blob_client.url}?{sas_token}"
     
     async def get_audio_metadata(self, blob_name: str) -> dict:
         """音声ファイルのメタデータ取得"""
@@ -1076,32 +1327,132 @@ class AudioMetricsCollector:
 ```json
 {
   "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable error message",
+    "details": {
+      "field": "specific error details",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "uuid"
+    }
+  }
+}
+```
+
+### 9.2 エラーコード一覧
+
+#### 9.2.1 認証・認可エラー (401, 403)
+- `INVALID_EPHEMERAL_KEY`: 不正なephemeral key
+- `EXPIRED_SESSION`: セッション期限切れ
+- `AUTHENTICATION_REQUIRED`: 認証が必要
+- `INSUFFICIENT_PERMISSIONS`: 権限不足
+
+#### 9.2.2 リクエストエラー (400, 422)
+- `INVALID_REQUEST_FORMAT`: リクエスト形式エラー
+- `MISSING_REQUIRED_FIELD`: 必須フィールド不足
+- `INVALID_FIELD_VALUE`: フィールド値不正
+- `INVALID_AUDIO_FORMAT`: 音声形式不正
+- `AUDIO_TOO_LARGE`: 音声ファイルサイズ超過
+- `INVALID_SDP_FORMAT`: SDP形式エラー
+
+#### 9.2.3 リソースエラー (404, 409)
+- `SESSION_NOT_FOUND`: セッション未発見
+- `AUDIO_FILE_NOT_FOUND`: 音声ファイル未発見
+- `RESOURCE_CONFLICT`: リソース競合
+
+#### 9.2.4 外部サービスエラー (502, 503)
+- `AZURE_OPENAI_ERROR`: Azure OpenAI APIエラー
+- `AZURE_STORAGE_ERROR`: Azure Storageエラー
+- `WEBRTC_CONNECTION_FAILED`: WebRTC接続エラー
+- `EXTERNAL_SERVICE_UNAVAILABLE`: 外部サービス利用不可
+
+#### 9.2.5 サーバーエラー (500)
+- `INTERNAL_SERVER_ERROR`: 内部サーバーエラー
+- `AUDIO_PROCESSING_ERROR`: 音声処理エラー
+- `DATABASE_ERROR`: データベースエラー
+
+#### 9.2.6 制限エラー (429, 507)
+- `RATE_LIMIT_EXCEEDED`: レート制限超過
+- `STORAGE_QUOTA_EXCEEDED`: ストレージ容量超過
+- `CONCURRENT_SESSION_LIMIT`: 同時セッション数制限
+
+### 9.3 エラーレスポンス例
+
+#### 9.3.1 認証エラー
+```json
+{
+  "error": {
+    "code": "INVALID_EPHEMERAL_KEY",
+    "message": "The provided ephemeral key is invalid or has expired",
+    "details": {
+      "session_id": "uuid",
+      "provided_key": "key_prefix...",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "req_12345"
+    }
+  }
+}
+```
+
+#### 9.3.2 バリデーションエラー
+```json
+{
+  "error": {
+    "code": "INVALID_REQUEST_FORMAT",
+    "message": "Request validation failed",
+    "details": {
+      "field_errors": [
+        {
+          "field": "model",
+          "message": "model is required",
+          "provided_value": null
+        },
+        {
+          "field": "voice",
+          "message": "voice must be one of: alloy, shimmer, nova, echo, fable, onyx",
+          "provided_value": "invalid_voice"
+        }
+      ],
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "req_12346"
+    }
+  }
+}
+```
+
+#### 9.3.3 音声ファイルエラー
+```json
+{
+  "error": {
     "code": "AUDIO_UPLOAD_FAILED",
     "message": "Failed to upload audio data to Azure Blob Storage",
     "details": {
       "session_id": "uuid",
       "audio_size": 1440000,
       "error_reason": "Storage account quota exceeded",
-      "timestamp": "2024-01-01T00:00:00Z"
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "req_12347"
     }
   }
 }
 ```
 
-### 9.2 エラー種別
-- `SESSION_CREATION_FAILED`: Azure OpenAIセッション作成エラー
-- `INVALID_EPHEMERAL_KEY`: 不正なephemeral keyエラー
-- `WEBRTC_SDP_EXCHANGE_FAILED`: SDP交換エラー
-- `WEBSOCKET_PROXY_ERROR`: WebSocketプロキシエラー
-- `AZURE_API_ERROR`: Azure OpenAI APIエラー
-- `AUDIO_UPLOAD_FAILED`: 音声アップロードエラー
-- `AUDIO_PROCESSING_ERROR`: 音声処理エラー
-- `STORAGE_QUOTA_EXCEEDED`: ストレージ容量超過
-- `AUDIO_FORMAT_UNSUPPORTED`: 非サポート音声形式
-- `SESSION_NOT_FOUND`: セッション未発見
-- `SESSION_EXPIRED`: セッション期限切れ
-- `AUTHENTICATION_FAILED`: 認証エラー
-- `RATE_LIMIT_EXCEEDED`: レート制限超過
+#### 9.3.4 外部サービスエラー
+```json
+{
+  "error": {
+    "code": "AZURE_OPENAI_ERROR",
+    "message": "Failed to communicate with Azure OpenAI service",
+    "details": {
+      "azure_error_code": "RateLimitExceeded",
+      "azure_error_message": "Rate limit exceeded. Please retry after 60 seconds",
+      "retry_after_seconds": 60,
+      "session_id": "uuid",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "req_12348"
+    }
+  }
+}
+```
 
 ## 10. パフォーマンス最適化
 
@@ -1138,17 +1489,89 @@ services:
       - ./logs:/app/logs
 ```
 
-### 11.2 ヘルスチェック
+### 11.2 ヘルスチェック実装
 ```python
-@app.get("/health")
+@app.get("/api/v1/health")
 async def health_check():
+    """システムヘルスチェック"""
+    azure_openai_health = await check_azure_openai_health()
+    blob_storage_health = await check_blob_storage_health()
+    
+    overall_status = "healthy"
+    if not azure_openai_health["status"] == "healthy" or not blob_storage_health["status"] == "healthy":
+        overall_status = "unhealthy"
+    
     return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow(),
+        "status": overall_status,
+        "timestamp": datetime.utcnow().isoformat(),
         "version": "1.0.0",
-        "azure_openai": await check_azure_openai_health(),
-        "blob_storage": await check_blob_storage_health()
+        "uptime_seconds": get_uptime_seconds(),
+        "services": {
+            "azure_openai": azure_openai_health,
+            "blob_storage": blob_storage_health,
+            "database": await check_database_health()
+        },
+        "metrics": {
+            "active_sessions": len(session_manager.sessions),
+            "total_sessions_today": await get_sessions_count_today(),
+            "audio_files_processed_today": await get_audio_files_count_today(),
+            "storage_usage_percentage": await get_storage_usage_percentage(),
+            "average_response_time_ms": await get_average_response_time()
+        }
     }
+
+@app.get("/api/v1/metrics")
+async def get_metrics(timeframe: str = "1h"):
+    """詳細メトリクス取得"""
+    return {
+        "timeframe": timeframe,
+        "timestamp": datetime.utcnow().isoformat(),
+        "system_metrics": await collect_system_metrics(),
+        "application_metrics": await collect_application_metrics(timeframe),
+        "azure_metrics": await collect_azure_metrics(timeframe),
+        "error_metrics": await collect_error_metrics(timeframe)
+    }
+
+async def check_azure_openai_health() -> dict:
+    """Azure OpenAI APIヘルスチェック"""
+    try:
+        start_time = time.time()
+        # 軽量なAPIコールでヘルスチェック
+        response = await azure_client.get_models()
+        response_time = (time.time() - start_time) * 1000
+        
+        return {
+            "status": "healthy",
+            "response_time_ms": response_time,
+            "last_check": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "last_check": datetime.utcnow().isoformat()
+        }
+
+async def check_blob_storage_health() -> dict:
+    """Azure Blob Storageヘルスチェック"""
+    try:
+        start_time = time.time()
+        # コンテナの存在確認
+        container_client = blob_service_client.get_container_client("audio-records")
+        await container_client.get_container_properties()
+        response_time = (time.time() - start_time) * 1000
+        
+        return {
+            "status": "healthy",
+            "response_time_ms": response_time,
+            "last_check": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "last_check": datetime.utcnow().isoformat()
+        }
 ```
 
 ## 12. 開発・テスト
@@ -1196,4 +1619,81 @@ async def test_audio_upload_and_retrieval():
     audio_files = await storage_client.list_session_audio_files("test_session_123")
     assert len(audio_files) > 0
 
+```
+
+## 13. API制限事項
+
+### 13.1 レート制限
+
+#### 13.1.1 セッション作成
+- **制限**: 100回/分/IP
+- **ヘッダー**: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+
+#### 13.1.2 音声アップロード
+- **制限**: 1000回/時間/セッション
+- **ファイルサイズ**: 最大10MB/ファイル
+
+#### 13.1.3 WebSocket接続
+- **制限**: 同時接続数1000/サーバー
+- **メッセージ**: 10,000回/分/セッション
+
+### 13.2 データ制限
+
+#### 13.2.1 ストレージ制限
+- **保存期間**: 30日間（設定可能）
+- **総容量**: 100GB/アカウント
+- **ファイル数**: 100,000ファイル/アカウント
+
+#### 13.2.2 セッション制限
+- **有効期間**: 1時間
+- **同時セッション**: 10セッション/ユーザー
+- **最大継続時間**: 4時間/セッション
+
+### 13.3 レート制限実装
+```python
+from fastapi import HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+import time
+from collections import defaultdict
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, calls_per_minute: int = 100):
+        super().__init__(app)
+        self.calls_per_minute = calls_per_minute
+        self.clients = defaultdict(list)
+    
+    async def dispatch(self, request, call_next):
+        client_ip = request.client.host
+        now = time.time()
+        
+        # 古いエントリを削除
+        self.clients[client_ip] = [
+            timestamp for timestamp in self.clients[client_ip]
+            if now - timestamp < 60
+        ]
+        
+        # レート制限チェック
+        if len(self.clients[client_ip]) >= self.calls_per_minute:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded",
+                headers={
+                    "X-RateLimit-Limit": str(self.calls_per_minute),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(int(now + 60))
+                }
+            )
+        
+        # リクエストを記録
+        self.clients[client_ip].append(now)
+        
+        response = await call_next(request)
+        
+        # レート制限ヘッダーを追加
+        remaining = self.calls_per_minute - len(self.clients[client_ip])
+        response.headers["X-RateLimit-Limit"] = str(self.calls_per_minute)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Reset"] = str(int(now + 60))
+        
+        return response
 ```
