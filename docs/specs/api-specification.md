@@ -1,30 +1,48 @@
-# API 仕様書
+# API 仕様書 - Azure OpenAI Realtime API プロキシサーバー
 
 ## 1. 概要
 
 ### 1.1 API 概要
-本APIは、React WebアプリケーションとAzure OpenAI Realtime APIを仲介するプロキシサーバーです。フロントエンドからのリクエストを安全にAzure OpenAI Realtime APIにプロキシし、WebRTCによるリアルタイム音声通信とユーザー発話音声データの自動保存機能を提供します。
+本APIは、React WebアプリケーションとAzure OpenAI Realtime APIを仲介するプロキシサーバーです。フロントエンドからのリクエストを安全にAzure OpenAI Realtime APIにプロキシし、WebRTCによるリアルタイム音声通信機能を提供します。
 
-### 1.2 ベースURL
+**主要目的**:
+- Azure OpenAI APIキーのフロントエンドからの完全隠蔽
+- フロントエンドリクエストの透過的なプロキシ処理
+- セキュアなephemeral keyの中継
+- WebRTC SDP Offer/Answerの安全な転送
+
+### 1.2 フロントエンド連携
+現在のReact フロントエンドが使用する環境変数とエンドポイント：
+
+```javascript
+// フロントエンド環境変数（.env）
+REACT_APP_WEBRTC_URL=http://localhost:8000/realtime    // WebRTC SDP プロキシ
+REACT_APP_SESSIONS_URL=http://localhost:8000/sessions  // セッション作成プロキシ
+REACT_APP_API_KEY=dummy_key                            // プロキシサーバーで無視
+REACT_APP_DEPLOYMENT=gpt-4o-realtime-preview          // AIモデル名
+REACT_APP_VOICE=alloy                                  // AI音声タイプ
+```
+
+### 1.3 ベースURL
 ```
 http://localhost:8000
 ```
 
-### 1.3 認証方式
+### 1.4 認証方式
 - **プロキシ認証**: APIキーはバックエンドで管理（フロントエンドには露出しない）
-- **セッション認証**: プロキシが生成したephemeral keyによる認証
+- **ephemeral key中継**: Azure OpenAIから取得したephemeral keyの透過的転送
 - **セキュア設計**: Azure APIキーをフロントエンドから隠蔽
 
-### 1.4 レスポンス形式
-- **Content-Type**: `application/json`
+### 1.5 レスポンス形式
+- **Content-Type**: `application/json` または `application/sdp`
 - **文字エンコーディング**: UTF-8
 - **日時形式**: ISO 8601 (例: `2024-01-01T00:00:00Z`)
 
-## 2. プロキシ API
+## 2. プロキシ API エンドポイント
 
-### 2.1 セッション管理プロキシ
+### 2.1 セッション作成プロキシ
 
-#### 2.1.1 セッション作成プロキシ
+#### 2.1.1 セッション作成
 
 **エンドポイント**
 ```
@@ -32,46 +50,58 @@ POST /sessions
 ```
 
 **説明**
-フロントエンドからのリクエストをAzure OpenAI Realtime Sessions APIにプロキシし、安全にephemeral keyを取得します。
+フロントエンドからのセッション作成リクエストをAzure OpenAI Sessions APIにプロキシし、ephemeral keyを安全に取得・転送します。
 
-**リクエスト**
-```json
+**フロントエンドからのリクエスト**
+```http
+POST /sessions HTTP/1.1
+Content-Type: application/json
+api-key: dummy_key  # プロキシサーバーでは無視される
+
 {
   "model": "gpt-4o-realtime-preview",
   "voice": "alloy"
 }
 ```
 
-**フィールド説明**
+**リクエストフィールド説明**
 - `model` (string, required): 使用するAIモデル名
   - 利用可能値: `gpt-4o-realtime-preview`
 - `voice` (string, required): AI音声の種類
   - 利用可能値: `alloy`, `shimmer`, `nova`, `echo`, `fable`, `onyx`
 
-**レスポンス**
+**プロキシサーバーの処理**
+1. フロントエンドから`api-key`ヘッダーを受信するが無視
+2. サーバー環境変数`AZURE_OPENAI_API_KEY`を使用
+3. Azure OpenAI Sessions APIにリクエスト転送:
+   ```
+   POST {AZURE_OPENAI_ENDPOINT}/openai/realtime/sessions?api-version={API_VERSION}
+   ```
+4. Azure OpenAIからのレスポンスをそのままフロントエンドに返却
+
+**フロントエンドへのレスポンス**
 ```json
 {
-  "id": "azure_session_id",
+  "id": "sess_001T4brAO1EhxMhTN6DbHEEW",
   "client_secret": {
-    "value": "ephemeral_key_value"
-  },
-  "created_at": "2024-01-01T00:00:00Z",
-  "expires_at": "2024-01-01T01:00:00Z"
+    "value": "ek_001T4bkjBqkGVq8ysnKjLAOU",
+    "expires_at": "2024-12-05T01:00:00.000Z"
+  }
 }
 ```
 
-**フィールド説明**
+**レスポンスフィールド説明**
 - `id` (string): Azure OpenAIから取得したセッション識別子
 - `client_secret.value` (string): Azure OpenAIから取得したephemeral key
-- `created_at` (string): セッション作成日時
-- `expires_at` (string): セッション有効期限
+- `client_secret.expires_at` (string): ephemeral keyの有効期限
 
 **ステータスコード**
 - `201`: セッション作成成功
-- `400`: リクエスト形式エラー
+- `400`: リクエスト形式エラー（model/voiceの値が不正など）
+- `401`: Azure OpenAI API認証エラー
 - `429`: レート制限超過
-- `500`: Azure OpenAI APIエラー
-- `503`: プロキシサーバーエラー
+- `500`: プロキシサーバー内部エラー
+- `502`: Azure OpenAI API通信エラー
 
 #### 2.1.2 WebRTC SDP プロキシ
 
@@ -81,23 +111,66 @@ POST /realtime?model={model}
 ```
 
 **説明**
-フロントエンドからのSDP OfferをAzure OpenAI WebRTC エンドポイントにプロキシします。
+フロントエンドからのSDP OfferをAzure OpenAI WebRTC APIにプロキシし、SDP Answerを返却します。
 
 **クエリパラメータ**
-- `model` (string, required): 使用するAIモデル名
+- `model` (string, required): 使用するAIモデル名（例: `gpt-4o-realtime-preview`）
 
-**ヘッダー**
-- `Authorization: Bearer {ephemeral_key}` (required)
-- `Content-Type: application/sdp` (required)
+**フロントエンドからのリクエスト**
+```http
+POST /realtime?model=gpt-4o-realtime-preview HTTP/1.1
+Content-Type: application/sdp
+Authorization: Bearer ek_001T4bkjBqkGVq8ysnKjLAOU
 
-**リクエストボディ（SDP Offer）**
-```
 v=0
 o=- 1234567890 1234567890 IN IP4 127.0.0.1
 s=session
 c=IN IP4 127.0.0.1
 t=0 0
 m=audio 9 UDP/TLS/RTP/SAVPF 111
+a=rtcp:9 IN IP4 127.0.0.1
+a=ice-ufrag:abc123
+a=ice-pwd:def456
+...（SDP Offer）...
+```
+
+**リクエストヘッダー**
+- `Authorization: Bearer {ephemeral_key}` (required): Azure OpenAIから取得したephemeral key
+- `Content-Type: application/sdp` (required): SDP形式を指定
+
+**プロキシサーバーの処理**
+1. Authorizationヘッダーから`Bearer `プレフィックスを除去してephemeral keyを抽出
+2. クエリパラメータからモデル名を取得
+3. Azure OpenAI WebRTC APIにSDP Offerを転送:
+   ```
+   POST {AZURE_OPENAI_ENDPOINT}/openai/realtime?model={model}&api-version={API_VERSION}
+   ```
+4. SDP Answerをそのままフロントエンドに返却
+
+**フロントエンドへのレスポンス**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/sdp
+
+v=0
+o=- 0987654321 0987654321 IN IP4 20.12.34.56
+s=session
+c=IN IP4 20.12.34.56
+t=0 0
+m=audio 9 UDP/TLS/RTP/SAVPF 111
+a=rtcp:9 IN IP4 20.12.34.56
+a=ice-ufrag:xyz789
+a=ice-pwd:uvw012
+...（SDP Answer）...
+```
+
+**ステータスコード**
+- `200`: SDP交換成功
+- `400`: SDP形式エラー、クエリパラメータエラー
+- `401`: ephemeral key認証エラー
+- `429`: レート制限超過
+- `500`: プロキシサーバー内部エラー
+- `502`: Azure WebRTC API通信エラー
 a=rtpmap:111 opus/48000/2
 a=fmtp:111 minptime=10;useinbandfec=1
 ...

@@ -1,157 +1,267 @@
-# バックエンドアプリケーション仕様書
+# バックエンド仕様書 - Azure OpenAI Realtime API プロキシサーバー
 
 ## 1. システム概要
 
 ### 1.1 アーキテクチャ概要
-本バックエンドアプリケーションは、React Webアプリケーションと Azure OpenAI Realtime API を仲介する Python FastAPI アプリケーションです。WebRTC接続のシグナリングサーバーとして機能し、リアルタイム音声通信を実現します。
+本プロキシサーバーは、React WebアプリケーションとAzure OpenAI Realtime APIの間のセキュアプロキシサーバーとして機能するPython FastAPIアプリケーションです。
 
-### 1.2 主要機能
-- WebRTC シグナリングサーバー
-- Azure OpenAI Realtime API プロキシ
-- **ユーザー発話音声データの Azure Blob Storage への永続化**
-- **音声データの自動分割・メタデータ管理**
-- リアルタイム音声ストリーミング処理
-- セッション管理とユーザー認証
+**プロキシ対象のエンドポイント：**
+- **Azure OpenAI Sessions API**: フロントエンドの `/sessions` リクエストをプロキシ
+- **Azure OpenAI WebRTC API**: フロントエンドの `/realtime` リクエストをプロキシ
 
-### 1.3 技術スタック
-- **ランタイム**: Python 3.13
-- **フレームワーク**: Python FastAPI
-- **WebSocket**: FastAPI WebSocket support
-- **WebRTC**: aiortc (Python WebRTC library)
-- **Azure SDK**: azure-storage-blob, azure-openai
+**セキュリティ向上：**
+- Azure OpenAI APIキーをフロントエンドから完全隠蔽
+- サーバーサイドでのAPIキー管理
+- セキュアなephemeral keyの中継
+
+### 1.2 フロントエンド連携仕様
+現在のReactフロントエンドは以下の環境変数でプロキシサーバーにアクセス：
+
+```javascript
+// フロントエンドの環境変数
+REACT_APP_WEBRTC_URL=http://localhost:8000/realtime    // WebRTC SDP プロキシエンドポイント
+REACT_APP_SESSIONS_URL=http://localhost:8000/sessions  // セッション作成プロキシエンドポイント
+REACT_APP_API_KEY=dummy_key                            // プロキシサーバーでは使用しない（隠蔽対象）
+REACT_APP_DEPLOYMENT=gpt-4o-realtime-preview          // AIモデル名
+REACT_APP_VOICE=alloy                                  // AI音声タイプ
+```
+
+### 1.3 主要機能
+- **透過的プロキシ処理**: フロントエンドのリクエストをAzure OpenAI APIに安全に転送
+- **APIキー隠蔽**: Azure OpenAI APIキーをサーバーサイドで管理
+- **ephemeral key中継**: セッション作成時のephemeral keyを安全に転送
+- **SDP プロキシ**: WebRTC SDP Offer/Answerの透過的な中継処理
+- **エラーハンドリング**: Azure APIエラーの適切な処理とレスポンス変換
+- **CORS対応**: フロントエンドからのクロスオリジンリクエスト対応
+
+### 1.4 技術スタック
+- **ランタイム**: Python 3.13+
+- **フレームワーク**: FastAPI
+- **HTTPクライアント**: httpx (非同期HTTP通信)
+- **Azure SDK**: azure-openai-client (推奨)
 - **コンテナ**: Docker
-- **非同期処理**: asyncio, uvloop
-- **パッケージ管理**: uv (Python package manager)
+- **非同期処理**: asyncio
+- **パッケージ管理**: uv または pip
 
-## 2. システム要件
+## 2. プロキシサーバー仕様
 
-### 2.1 ランタイム要件
-- **Python**: 3.13以上
-- **OS**: Linux (推奨: Ubuntu 22.04 LTS)
-- **メモリ**: 最小2GB、推奨4GB以上
-- **CPU**: 最小2コア、推奨4コア以上
+### 2.1 フロントエンド連携要件
+フロントエンドのApp.jsが期待するプロキシエンドポイントとリクエスト形式：
 
-### 2.2 機能要件
-- リアルタイム双方向音声通信
-- WebRTC P2P接続のシグナリング
-- Azure OpenAI APIとの統合
-- ユーザー発話音声データの自動保存
-- 音声データの時系列管理
-- セッション管理
-- エラーハンドリングとログ記録
+#### 2.1.1 セッション作成プロキシ
+**フロントエンドからのリクエスト**：
+```javascript
+// App.js startSession()で実行される処理
+const response = await fetch(process.env.REACT_APP_SESSIONS_URL, {
+  method: "POST",
+  headers: {
+    "api-key": process.env.REACT_APP_API_KEY,  // プロキシサーバーで無視
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify({
+    model: process.env.REACT_APP_DEPLOYMENT,   // "gpt-4o-realtime-preview"
+    voice: process.env.REACT_APP_VOICE         // "alloy"
+  })
+});
+```
 
-### 2.3 非機能要件
-- **可用性**: 99.9%
-- **レスポンス時間**: WebRTC シグナリング < 100ms
-- **スループット**: 同時接続数 1000セッション
-- **セキュリティ**: HTTPS/WSS、認証・認可
-- **スケーラビリティ**: 水平スケーリング対応
+**プロキシサーバーの処理**：
+1. フロントエンドからのapi-keyヘッダーを無視
+2. サーバー環境変数からAzure OpenAI APIキーを取得
+3. Azure OpenAI Sessions APIにリクエストを転送
+4. レスポンスをそのままフロントエンドに返却
 
-## 3. API 仕様
+#### 2.1.2 WebRTC SDP プロキシ
+**フロントエンドからのリクエスト**：
+```javascript
+// App.js initializeWebRTC()で実行される処理
+const sdpResponse = await fetch(`${process.env.REACT_APP_WEBRTC_URL}?model=${process.env.REACT_APP_DEPLOYMENT}`, {
+  method: "POST",
+  body: offer.sdp,                           // SDP Offer文字列
+  headers: {
+    Authorization: `Bearer ${ephemeralKey}`, // Azure OpenAIから取得したephemeral key
+    "Content-Type": "application/sdp",
+  },
+});
+```
 
-### 3.1 WebRTC シグナリング API（Azure OpenAI Realtime API プロキシ）
+**プロキシサーバーの処理**：
+1. Authorization ヘッダーからephemeral keyを抽出
+2. クエリパラメータからモデル名を取得
+3. Azure OpenAI WebRTC APIにSDP Offerを転送
+4. SDP Answerをそのままフロントエンドに返却
 
-#### 3.1.1 セッション初期化
-**POST** `/api/v1/realtime/sessions`
-```json
+### 2.2 環境変数設定
+プロキシサーバーが管理すべき環境変数：
+
+```bash
+# Azure OpenAI API 設定
+AZURE_OPENAI_API_KEY=sk-xxx...                    # Azure OpenAI APIキー（重要）
+AZURE_OPENAI_ENDPOINT=https://xxx.openai.azure.com # Azure OpenAIエンドポイント
+AZURE_OPENAI_API_VERSION=2024-10-01-preview       # APIバージョン
+
+# サーバー設定
+HOST=0.0.0.0                                      # サーバーホスト
+PORT=8000                                          # サーバーポート
+CORS_ORIGINS=http://localhost:3000                 # フロントエンドのオリジン
+
+# ログレベル
+LOG_LEVEL=INFO
+```
+
+### 2.3 セキュリティ要件
+- **APIキー管理**: Azure OpenAI APIキーはサーバー環境変数でのみ管理
+- **フロントエンド隠蔽**: フロントエンドからはapi-keyヘッダーを受け取るが使用しない
+- **CORS設定**: 指定されたフロントエンドオリジンからのアクセスのみ許可
+- **入力検証**: フロントエンドからのリクエストパラメータを適切に検証
+- **エラー情報制限**: 内部エラーの詳細情報はログに記録し、フロントエンドには適切なエラーメッセージのみ返却
+
+## 3. プロキシ API エンドポイント仕様
+
+### 3.1 セッション作成プロキシ
+
+#### 3.1.1 POST /sessions
+フロントエンドのセッション作成リクエストをAzure OpenAI Sessions APIにプロキシします。
+
+**エンドポイント**: `POST /sessions`
+
+**フロントエンドからのリクエスト**:
+```http
+POST /sessions HTTP/1.1
+Content-Type: application/json
+api-key: dummy_key  # プロキシサーバーでは無視される
+
 {
-  "user_id": "string",
   "model": "gpt-4o-realtime-preview",
-  "voice": "alloy",
-  "instructions": "あなたはとても優秀なAIアシスタントです。",
-  "modalities": ["text", "audio"],
-  "tools": [
-    {
-      "type": "function",
-      "name": "function_name",
-      "description": "Function description",
-      "parameters": {...}
-    }
-  ]
+  "voice": "alloy"
 }
 ```
 
-**Response**:
+**プロキシサーバーの処理フロー**:
+1. フロントエンドからリクエスト受信
+2. `api-key`ヘッダーを無視し、サーバー環境変数`AZURE_OPENAI_API_KEY`を使用
+3. Azure OpenAI Sessions API (`{AZURE_OPENAI_ENDPOINT}/openai/realtime/sessions`) にリクエスト転送
+4. Azure OpenAIレスポンスをそのままフロントエンドに返却
+
+**Azure OpenAI APIへの実際のリクエスト**:
+```http
+POST {AZURE_OPENAI_ENDPOINT}/openai/realtime/sessions?api-version={API_VERSION} HTTP/1.1
+api-key: {AZURE_OPENAI_API_KEY}
+Content-Type: application/json
+
+{
+  "model": "gpt-4o-realtime-preview",
+  "voice": "alloy"
+}
+```
+
+**フロントエンドへのレスポンス**:
 ```json
 {
-  "session_id": "uuid",
-  "ephemeral_key": "string",
-  "webrtc_endpoint": "wss://localhost:8000/api/v1/realtime/webrtc/{session_id}",
-  "created_at": "2024-01-01T00:00:00Z",
-  "expires_at": "2024-01-01T01:00:00Z"
+  "id": "sess_001T4brAO1EhxMhTN6DbHEEW",
+  "client_secret": {
+    "value": "ek_001T4bkjBqkGVq8ysnKjLAOU",
+    "expires_at": "2024-12-05T01:00:00.000Z"
+  }
 }
 ```
 
-#### 3.1.2 WebRTC SDP 交換エンドポイント
-**POST** `/api/v1/realtime/webrtc/{session_id}/offer`
+**ステータスコード**:
+- `201`: セッション作成成功
+- `400`: リクエスト形式エラー
+- `401`: Azure API認証エラー
+- `429`: レート制限超過
+- `500`: サーバー内部エラー
+- `502`: Azure API通信エラー
+
+### 3.2 WebRTC SDP プロキシ
+
+#### 3.2.1 POST /realtime
+フロントエンドのSDP OfferをAzure OpenAI WebRTC APIにプロキシします。
+
+**エンドポイント**: `POST /realtime?model={model}`
+
+**フロントエンドからのリクエスト**:
+```http
+POST /realtime?model=gpt-4o-realtime-preview HTTP/1.1
+Content-Type: application/sdp
+Authorization: Bearer ek_001T4bkjBqkGVq8ysnKjLAOU
+
+v=0
+o=- 1234567890 1234567890 IN IP4 127.0.0.1
+s=session
+c=IN IP4 127.0.0.1
+t=0 0
+m=audio 9 UDP/TLS/RTP/SAVPF 111
+...（SDP Offer）...
 ```
+
+**プロキシサーバーの処理フロー**:
+1. Authorizationヘッダーからephemeral keyを抽出 (`Bearer ` プレフィックスを除去)
+2. クエリパラメータからモデル名を取得
+3. Azure OpenAI WebRTC API にSDP Offerを転送
+4. SDP Answerをそのままフロントエンドに返却
+
+**Azure OpenAI APIへの実際のリクエスト**:
+```http
+POST {AZURE_OPENAI_ENDPOINT}/openai/realtime?model={model}&api-version={API_VERSION} HTTP/1.1
 Content-Type: application/sdp
 Authorization: Bearer {ephemeral_key}
 
 v=0
 o=- 1234567890 1234567890 IN IP4 127.0.0.1
-s=session
-...
+...（SDP Offer）...
 ```
 
-**Response**:
-```
+**フロントエンドへのレスポンス**:
+```http
+HTTP/1.1 200 OK
 Content-Type: application/sdp
 
 v=0
-o=- 9876543210 9876543210 IN IP4 127.0.0.1
+o=- 0987654321 0987654321 IN IP4 20.12.34.56
 s=session
-...
+c=IN IP4 20.12.34.56
+t=0 0
+m=audio 9 UDP/TLS/RTP/SAVPF 111
+...（SDP Answer）...
 ```
 
-#### 3.1.3 WebSocket プロキシエンドポイント
-```
-wss://localhost:8000/api/v1/realtime/webrtc/{session_id}
-```
+**ステータスコード**:
+- `200`: SDP交換成功
+- `400`: SDP形式エラー、クエリパラメータエラー
+- `401`: ephemeral key認証エラー
+- `429`: レート制限超過
+- `500`: サーバー内部エラー
+- `502`: Azure WebRTC API通信エラー
+2. Azure OpenAI WebRTC エンドポイントにSDP Offer転送
+3. Azure OpenAIからのSDP Answerをフロントエンドに転送
 
-**接続時認証**:
-- QueryパラメータまたはWebSocketヘッダーでephemeral_keyを送信
-- セッションの有効性とキーの妥当性を検証
-
-**メッセージ型定義**:
-```python
-class RealtimeMessage(BaseModel):
-    type: str  # Azure OpenAI Realtime API イベントタイプ
-    payload: dict  # イベント固有のデータ
-    timestamp: datetime
-    session_id: str
-    direction: str  # "client_to_azure", "azure_to_client"
+**フロントエンドへのレスポンス**:
+```
+Content-Type: application/sdp
+Body: SDP Answer (text/plain)
 ```
 
-**プロキシメッセージフロー**:
-1. クライアント → バックエンド → Azure OpenAI（WebSocket経由）
-2. データチャネルメッセージの透過的転送
-3. 音声データの自動保存（ユーザー発話時）
-4. Azure OpenAI → バックエンド → クライアント
+### 3.3 ヘルスチェック
 
-#### 3.1.4 セッション管理 API
+#### 3.3.1 GET /health
+プロキシサーバーの状態を確認します。
 
-**GET** `/api/v1/realtime/sessions/{session_id}`
+**レスポンス**:
 ```json
 {
-  "session_id": "uuid",
-  "status": "active|inactive|terminated|expired",
-  "created_at": "2024-01-01T00:00:00Z",
-  "expires_at": "2024-01-01T01:00:00Z",
-  "user_id": "string",
-  "model": "gpt-4o-realtime-preview",
-  "voice": "alloy",
-  "connection_state": "connected|disconnected|connecting|failed",
-  "audio_files_count": 5,
-  "total_duration": 120.5,
-  "last_activity": "2024-01-01T00:05:00Z"
+  "status": "healthy",
+  "azure_connection": "ok",
+  "timestamp": "2024-01-01T00:00:00Z"
 }
 ```
 
-**DELETE** `/api/v1/realtime/sessions/{session_id}`
+#### 3.3.2 セッション終了
+**DELETE** `/sessions/{session_id}`
 ```json
 {
-  "session_id": "uuid",
+  "session_id": "sess_001T4brAO1EhxMhTN6DbHEEW",
   "status": "terminated",
   "terminated_at": "2024-01-01T00:00:00Z",
   "cleanup_completed": true,
@@ -163,17 +273,15 @@ class RealtimeMessage(BaseModel):
 }
 ```
 
-**GET** `/api/v1/realtime/sessions`
+#### 3.3.3 セッション一覧取得
+**GET** `/sessions`
 ```json
 {
   "sessions": [
     {
-      "session_id": "uuid",
+      "session_id": "sess_001T4brAO1EhxMhTN6DbHEEW",
       "status": "active",
       "created_at": "2024-01-01T00:00:00Z",
-      "user_id": "string",
-      "model": "gpt-4o-realtime-preview",
-      "voice": "alloy",
       "connection_state": "connected",
       "audio_files_count": 5,
       "total_duration": 120.5
@@ -189,73 +297,64 @@ class RealtimeMessage(BaseModel):
 }
 ```
 
-### 3.2 Azure OpenAI Realtime API プロキシ
+### 3.4 プロキシ実装詳細
 
-#### 3.2.1 プロキシアーキテクチャ
-バックエンドは以下の役割でAzure OpenAI Realtime APIをプロキシします：
-
-1. **認証プロキシ**: APIキーを安全に管理し、ephemeral keyを生成
-2. **WebRTCプロキシ**: SDP交換とWebSocket通信の中継
-3. **音声データ監視**: リアルタイム音声ストリームの自動保存
-4. **セッション管理**: ユーザーセッションの状態管理とクリーンアップ
-
-#### 3.2.2 Azure Sessions API プロキシ
-**内部実装**: Azure OpenAI `/realtime/sessions` エンドポイントへのプロキシ
-
+#### 3.4.1 セッション作成プロキシ
 ```python
-class AzureOpenAISessionProxy:
+class SessionProxyService:
     async def create_session(self, request: SessionCreateRequest) -> SessionResponse:
-        """Azure OpenAI Sessions APIへのプロキシ呼び出し"""
+        """Azure OpenAI Sessions APIへのセキュアプロキシ"""
+        
+        # Azure OpenAI APIに内部APIキーでリクエスト
         azure_request = {
             "model": request.model,
-            "voice": request.voice,
-            "instructions": request.instructions,
-            "modalities": request.modalities,
-            "tools": request.tools
+            "voice": request.voice
         }
         
         response = await self.azure_client.post(
             f"{self.azure_endpoint}/realtime/sessions",
             headers={
-                "api-key": self.api_key,
+                "api-key": self.api_key,  # 内部で管理、フロントエンドには非公開
                 "Content-Type": "application/json"
             },
             json=azure_request
         )
         
+        if response.status_code != 201:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Azure OpenAI session creation failed: {response.text}"
+            )
+        
         azure_session = response.json()
         
-        # 内部セッション管理
-        session = await self.session_manager.create_session(
+        # 内部セッション管理（監視・ログ用）
+        await self.session_repository.save_session_metadata(
             session_id=azure_session["id"],
             ephemeral_key=azure_session["client_secret"]["value"],
-            user_id=request.user_id,
             model=request.model,
-            voice=request.voice
+            voice=request.voice,
+            created_at=datetime.utcnow()
         )
         
-        return SessionResponse(
-            session_id=session.session_id,
-            ephemeral_key=session.ephemeral_key,
-            webrtc_endpoint=f"wss://{self.host}/api/v1/realtime/webrtc/{session.session_id}",
-            created_at=session.created_at,
-            expires_at=session.expires_at
-        )
+        # Azure OpenAIのレスポンスをそのまま返却
+        return azure_session
 ```
 
-#### 3.2.3 WebRTC SDP プロキシ
+#### 3.4.2 WebRTC SDP プロキシ
 ```python
 class WebRTCSDPProxy:
-    async def proxy_sdp_offer(self, session_id: str, offer_sdp: str, ephemeral_key: str) -> str:
-        """クライアントのSDP OfferをAzure OpenAIに転送"""
-        session = await self.session_manager.get_session(session_id)
+    async def proxy_sdp_offer(self, model: str, offer_sdp: str, ephemeral_key: str) -> str:
+        """SDP OfferをAzure OpenAI WebRTC endpointに転送"""
         
-        if not session or session.ephemeral_key != ephemeral_key:
-            raise HTTPException(status_code=401, detail="Invalid session or ephemeral key")
+        # Ephemeral key検証（セッション管理テーブルから）
+        session = await self.session_repository.get_session_by_key(ephemeral_key)
+        if not session or session.is_expired():
+            raise HTTPException(status_code=401, detail="Invalid or expired ephemeral key")
         
-        # Azure OpenAI WebRTC エンドポイントにSDP Offerを送信
+        # Azure OpenAI WebRTC endpointにプロキシ
         response = await self.azure_client.post(
-            f"{self.azure_webrtc_endpoint}?model={session.model}",
+            f"{self.azure_webrtc_endpoint}?model={model}",
             headers={
                 "Authorization": f"Bearer {ephemeral_key}",
                 "Content-Type": "application/sdp"
@@ -263,121 +362,123 @@ class WebRTCSDPProxy:
             data=offer_sdp
         )
         
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"Azure WebRTC SDP exchange failed: {response.text}"
+            )
+        
         answer_sdp = await response.text()
         
         # セッション状態更新
-        await self.session_manager.update_connection_state(session_id, "connecting")
+        await self.session_repository.update_connection_state(
+            session.session_id, "webrtc_connected"
+        )
         
         return answer_sdp
 ```
 
-#### 3.2.4 リアルタイムメッセージプロキシ
+#### 3.4.3 WebSocket透過プロキシ
 ```python
-class RealtimeMessageProxy:
-    async def handle_websocket_connection(self, websocket: WebSocket, session_id: str):
-        """WebSocketを通じてクライアントとAzure OpenAI間のメッセージをプロキシ"""
-        session = await self.session_manager.get_session(session_id)
+class WebSocketProxy:
+    async def handle_websocket_connection(self, websocket: WebSocket, access_token: str):
+        """フロントエンドとAzure OpenAI間のWebSocket透過プロキシ"""
         
-        # Azure OpenAI WebSocketに接続
-        azure_ws = await self.connect_to_azure_websocket(session)
+        # アクセストークン検証
+        session = await self.session_repository.get_session_by_key(access_token)
+        if not session or session.is_expired():
+            await websocket.close(code=1008, reason="Invalid access token")
+            return
         
-        # 双方向メッセージ転送
-        await asyncio.gather(
-            self.client_to_azure_proxy(websocket, azure_ws, session_id),
-            self.azure_to_client_proxy(azure_ws, websocket, session_id)
+        try:
+            # Azure OpenAI WebSocketに接続
+            azure_ws_url = f"{self.azure_websocket_endpoint}?access_token={access_token}"
+            azure_ws = await websockets.connect(azure_ws_url, subprotocols=["realtime"])
+            
+            # 双方向プロキシタスクを開始
+            await asyncio.gather(
+                self._proxy_client_to_azure(websocket, azure_ws, session.session_id),
+                self._proxy_azure_to_client(azure_ws, websocket, session.session_id)
+            )
+            
+        except Exception as e:
+            await self._handle_proxy_error(websocket, session.session_id, e)
+    
+    async def _proxy_client_to_azure(self, client_ws: WebSocket, azure_ws, session_id: str):
+        """クライアント → Azure透過転送"""
+        try:
+            async for message in client_ws.iter_text():
+                await azure_ws.send(message)
+                await self._log_message(session_id, "client_to_azure", message)
+        except Exception as e:
+            await self._handle_proxy_error(client_ws, session_id, e)
+    
+    async def _proxy_azure_to_client(self, azure_ws, client_ws: WebSocket, session_id: str):
+        """Azure → クライアント透過転送 + 音声データ処理"""
+        try:
+            async for message in azure_ws:
+                await client_ws.send_text(message)
+                await self._log_message(session_id, "azure_to_client", message)
+                
+                # 音声データ検出・保存
+                await self._process_audio_if_needed(message, session_id)
+                
+        except Exception as e:
+            await self._handle_proxy_error(client_ws, session_id, e)
+```
+
+### 3.5 音声ストレージ管理
+
+#### 3.5.1 自動音声保存機能
+音声データはWebSocketプロキシ中にリアルタイムで自動検出・保存されます：
+
+```python
+class AudioDataProcessor:
+    async def _process_audio_if_needed(self, message: str, session_id: str):
+        """WebSocketメッセージから音声データを検出・保存"""
+        try:
+            event = json.loads(message)
+            
+            # ユーザー音声データイベントを検出
+            if event.get("type") == "input_audio_buffer.speech_started":
+                await self._start_audio_recording(session_id, "user")
+            
+            elif event.get("type") == "input_audio_buffer.speech_stopped":
+                await self._stop_audio_recording(session_id, "user")
+            
+            # AI応答音声データイベントを検出
+            elif event.get("type") == "response.audio.delta":
+                await self._save_audio_chunk(session_id, event.get("delta"), "assistant")
+            
+            elif event.get("type") == "response.audio.done":
+                await self._finalize_audio_recording(session_id, "assistant")
+                
+        except json.JSONDecodeError:
+            # 音声以外のメッセージは無視
+            pass
+    
+    async def _save_audio_chunk(self, session_id: str, audio_delta: str, speaker_type: str):
+        """音声チャンクをBlob Storageに保存"""
+        audio_data = base64.b64decode(audio_delta)
+        
+        blob_path = f"{speaker_type}/{datetime.utcnow().isoformat()}/{session_id}.wav"
+        blob_url = await self.blob_storage.upload_chunk(blob_path, audio_data)
+        
+        # メタデータ記録
+        await self.audio_repository.save_audio_metadata(
+            session_id=session_id,
+            blob_url=blob_url,
+            speaker_type=speaker_type,
+            timestamp=datetime.utcnow(),
+            size_bytes=len(audio_data)
         )
-    
-    async def client_to_azure_proxy(self, client_ws: WebSocket, azure_ws, session_id: str):
-        """クライアント → Azure OpenAI メッセージ転送"""
-        async for message in client_ws.iter_text():
-            # メッセージログ記録
-            await self.log_message(session_id, "client_to_azure", message)
-            
-            # Azure OpenAIに転送
-            await azure_ws.send(message)
-    
-    async def azure_to_client_proxy(self, azure_ws, client_ws: WebSocket, session_id: str):
-        """Azure OpenAI → クライアント メッセージ転送"""
-        async for message in azure_ws:
-            # メッセージログ記録
-            await self.log_message(session_id, "azure_to_client", message)
-            
-            # 音声データ検出・保存
-            await self.process_audio_message(message, session_id)
-            
-            # クライアントに転送
-            await client_ws.send_text(message)
 ```
 
-### 3.3 音声ストレージ API
-
-#### 3.3.1 音声アップロード
-**POST** `/api/v1/audio/upload`
-```json
-{
-  "session_id": "string",
-  "audio_data": "base64_encoded_audio",
-  "audio_type": "user_speech|ai_response|full_conversation",
-  "metadata": {
-    "duration": 30.5,
-    "format": "wav",
-    "sample_rate": 48000,
-    "channels": 1,
-    "speaker": "user|assistant",
-    "timestamp_start": "2024-01-01T00:00:00.000Z",
-    "timestamp_end": "2024-01-01T00:00:30.500Z",
-    "confidence_score": 0.95,
-    "language": "ja-JP",
-    "transcription": "こんにちは、今日はいい天気ですね。"
-  }
-}
-```
-
+#### 3.5.2 音声検索・取得API
 **Response**:
 ```json
 {
-  "audio_id": "uuid",
-  "blob_url": "https://storage.blob.core.windows.net/audio-records/user-speech/2024/01/01/{session_id}/{audio_id}.wav",
-  "upload_status": "completed",
-  "size_bytes": 1440000,
-  "sas_url": "https://storage.blob.core.windows.net/audio-records/...?sv=2023-01-03&se=2024-01-01T01%3A00%3A00Z&sr=b&sp=r&sig=...",
-  "sas_expires_at": "2024-01-01T01:00:00Z",
-  "created_at": "2024-01-01T00:00:00Z"
-}
-```
-
-#### 3.3.2 音声検索・取得
-**GET** `/api/v1/audio/{audio_id}`
-```json
-{
-  "audio_id": "uuid",
-  "session_id": "uuid",
-  "audio_type": "user_speech",
-  "blob_url": "https://storage.blob.core.windows.net/...",
-  "sas_url": "https://storage.blob.core.windows.net/...?sv=2023-01-03&se=...",
-  "sas_expires_at": "2024-01-01T01:00:00Z",
-  "size_bytes": 1440000,
-  "metadata": {
-    "duration": 30.5,
-    "format": "wav",
-    "sample_rate": 48000,
-    "channels": 1,
-    "speaker": "user",
-    "timestamp_start": "2024-01-01T00:00:00.000Z",
-    "timestamp_end": "2024-01-01T00:00:30.500Z",
-    "confidence_score": 0.95,
-    "language": "ja-JP",
-    "transcription": "こんにちは、今日はいい天気ですね。"
-  },
-  "created_at": "2024-01-01T00:00:00Z",
-  "last_accessed": "2024-01-01T00:05:00Z"
-}
-```
-
-**GET** `/api/v1/audio/session/{session_id}`
-```json
-{
-  "session_id": "uuid",
+  "session_id": "sess_001T4brAO1EhxMhTN6DbHEEW",
   "summary": {
     "total_count": 25,
     "total_duration": 1800.5,
@@ -397,7 +498,7 @@ class RealtimeMessageProxy:
       "metadata": {
         "duration": 30.5,
         "format": "wav",
-        "speaker": "user",
+        "speaker_type": "user",
         "timestamp_start": "2024-01-01T00:00:00.000Z",
         "timestamp_end": "2024-01-01T00:00:30.500Z",
         "language": "ja-JP"
@@ -413,8 +514,8 @@ class RealtimeMessageProxy:
 }
 ```
 
-#### 3.3.3 音声データ削除
-**DELETE** `/api/v1/audio/{audio_id}`
+#### 3.5.3 音声データ削除
+**DELETE** `/audio/{audio_id}`
 
 **Response**:
 ```json
@@ -425,159 +526,17 @@ class RealtimeMessageProxy:
 }
 ```
 
-**DELETE** `/api/v1/audio/session/{session_id}`
+**DELETE** `/audio/session/{session_id}`
 
 **Response**:
 ```json
 {
-  "session_id": "uuid",
+  "session_id": "sess_001T4brAO1EhxMhTN6DbHEEW",
   "deletion_status": "completed",
   "deleted_count": 25,
   "deleted_size_bytes": 57600000,
   "failed_deletions": [],
   "deleted_at": "2024-01-01T00:30:00Z"
-}
-```
-
-#### 3.3.4 音声データ統計・分析
-**GET** `/api/v1/audio/stats`
-
-**クエリパラメータ**:
-- `session_id` (string, optional): 特定セッションの統計
-- `user_id` (string, optional): 特定ユーザーの統計
-- `start_date` (string, optional): 集計開始日（YYYY-MM-DD）
-- `end_date` (string, optional): 集計終了日（YYYY-MM-DD）
-- `group_by` (string, optional): グループ化単位
-  - 利用可能値: `day`, `week`, `month`, `session`, `user`
-
-**Response**:
-```json
-{
-  "period": {
-    "start_date": "2024-01-01",
-    "end_date": "2024-01-31",
-    "group_by": "day"
-  },
-  "summary": {
-    "total_files": 1250,
-    "total_duration": 86400.0,
-    "total_size_bytes": 2764800000,
-    "unique_sessions": 150,
-    "unique_users": 75,
-    "average_file_duration": 69.12,
-    "average_session_duration": 576.0
-  },
-  "breakdown": [
-    {
-      "date": "2024-01-01",
-      "file_count": 45,
-      "total_duration": 3240.5,
-      "total_size_bytes": 103596800,
-      "session_count": 8,
-      "user_count": 6
-    }
-  ],
-  "audio_type_breakdown": {
-    "user_speech": {
-      "count": 750,
-      "total_duration": 51840.0,
-      "percentage": 60.0
-    },
-    "ai_response": {
-      "count": 500,
-      "total_duration": 34560.0,
-      "percentage": 40.0
-    }
-  }
-}
-```
-
-### 3.4 ヘルスチェック・監視 API
-
-#### 3.4.1 システム状態
-**GET** `/api/v1/health`
-
-**Response**:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "version": "1.0.0",
-  "uptime_seconds": 86400,
-  "services": {
-    "azure_openai": {
-      "status": "healthy",
-      "response_time_ms": 120,
-      "last_check": "2024-01-01T00:00:00Z"
-    },
-    "blob_storage": {
-      "status": "healthy",
-      "response_time_ms": 45,
-      "last_check": "2024-01-01T00:00:00Z"
-    },
-    "database": {
-      "status": "healthy",
-      "response_time_ms": 12,
-      "last_check": "2024-01-01T00:00:00Z"
-    }
-  },
-  "metrics": {
-    "active_sessions": 25,
-    "total_sessions_today": 150,
-    "audio_files_processed_today": 1250,
-    "storage_usage_percentage": 45.2,
-    "average_response_time_ms": 95
-  }
-}
-```
-
-#### 3.4.2 詳細メトリクス
-**GET** `/api/v1/metrics`
-
-**クエリパラメータ**:
-- `timeframe` (string, optional): 集計期間
-  - 利用可能値: `1h`, `24h`, `7d`, `30d`（デフォルト: `1h`）
-
-**Response**:
-```json
-{
-  "timeframe": "1h",
-  "timestamp": "2024-01-01T00:00:00Z",
-  "system_metrics": {
-    "cpu_usage_percentage": 45.2,
-    "memory_usage_percentage": 67.8,
-    "disk_usage_percentage": 34.1,
-    "network_io_mbps": 125.6
-  },
-  "application_metrics": {
-    "active_sessions": 25,
-    "sessions_created": 45,
-    "sessions_terminated": 38,
-    "webrtc_connections_established": 42,
-    "webrtc_connection_failures": 3,
-    "audio_files_uploaded": 125,
-    "audio_upload_failures": 2,
-    "average_session_duration": 420.5,
-    "average_audio_processing_time_ms": 250
-  },
-  "azure_metrics": {
-    "openai_api_calls": 1250,
-    "openai_api_errors": 15,
-    "openai_average_response_time_ms": 180,
-    "blob_storage_operations": 250,
-    "blob_storage_errors": 2,
-    "storage_bandwidth_mbps": 45.2
-  },
-  "error_metrics": {
-    "total_errors": 20,
-    "error_rate_percentage": 1.6,
-    "error_breakdown": {
-      "authentication_errors": 5,
-      "azure_api_errors": 10,
-      "storage_errors": 3,
-      "validation_errors": 2
-    }
-  }
 }
 ```
 

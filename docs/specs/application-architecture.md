@@ -1,38 +1,50 @@
-# プロキシサーバー アプリケーションアーキテクチャ仕様書
+# Azure OpenAI Realtime API プロキシサーバー アーキテクチャ仕様書
 
 ## 1. アーキテクチャ概要
 
 ### 1.1 設計原則
 本プロキシサーバーは、React WebアプリケーションとAzure OpenAI Realtime APIを安全に仲介するSOLID原則に基づいて設計されています：
 
-- **単一責任原則 (SRP)**: 各クラスは単一の責任を持つ
+- **単一責任原則 (SRP)**: 各クラスは単一の責任を持つ（プロキシ処理、認証管理、エラーハンドリングなど）
 - **開放閉鎖原則 (OCP)**: 拡張に対して開放的、修正に対して閉鎖的
 - **リスコフ置換原則 (LSP)**: 基底クラスは派生クラスで置換可能
 - **インターフェース分離原則 (ISP)**: クライアントが使わないインターフェースに依存させない
 - **依存性逆転原則 (DIP)**: 高レベルモジュールは低レベルモジュールに依存しない
 
-### 1.2 プロキシサーバーの役割
-- **セキュリティ**: Azure OpenAI APIキーをフロントエンドから隠蔽
-- **プロキシ機能**: フロントエンドリクエストのAzure OpenAI APIへの安全な転送
-- **音声データ管理**: ユーザー発話音声の自動保存とメタデータ管理
-- **ログ・監視**: 通信ログの記録とシステム監視
-- **エラーハンドリング**: Azure API エラーの適切な処理とレスポンス
+### 1.2 プロキシサーバーの主要責任
+- **APIキー管理**: Azure OpenAI APIキーをサーバーサイドで安全に管理
+- **透過的プロキシ**: フロントエンドリクエストのAzure OpenAI APIへの透明な転送
+- **セキュリティ**: フロントエンドからのAPIキー隠蔽とセキュア通信
+- **エラーハンドリング**: Azure API エラーの適切な処理とレスポンス変換
+- **ログ・監視**: プロキシ通信の記録とシステム監視
 
-### 1.3 アーキテクチャパターン
-- **レイヤードアーキテクチャ**: Presentation, Application, Domain, Infrastructure層の分離
+### 1.3 フロントエンド連携設計
+**現在のReact フロントエンド実装に対応**：
+
+```javascript
+// フロントエンドの環境変数設定
+REACT_APP_SESSIONS_URL=http://localhost:8000/sessions    // セッション作成プロキシ
+REACT_APP_WEBRTC_URL=http://localhost:8000/realtime      // WebRTC SDP プロキシ
+REACT_APP_API_KEY=dummy_key                              // プロキシサーバーで無視
+REACT_APP_DEPLOYMENT=gpt-4o-realtime-preview            // AIモデル名
+REACT_APP_VOICE=alloy                                    // AI音声タイプ
+```
+
+### 1.4 アーキテクチャパターン
 - **プロキシパターン**: Azure OpenAI APIへの透過的なプロキシ機能
+- **レイヤードアーキテクチャ**: Presentation, Application, Domain, Infrastructure層の分離
 - **依存性注入 (DI)**: コンストラクタインジェクションを使用した疎結合設計
-- **リポジトリパターン**: 音声データアクセス層の抽象化
-- **ファクトリーパターン**: オブジェクト生成の責任分離
+- **ファクトリーパターン**: HTTPクライアント・Azure クライアントの生成責任分離
+- **アダプターパターン**: Azure OpenAI SDK との統合
 
-### 1.4 運用容易性の追求
+### 1.5 運用容易性の追求
 - **ログ駆動開発**: 構造化ログによるプロキシ通信の運用監視性
 - **ヘルスチェック**: プロキシサーバー・Azure OpenAI接続状態監視
-- **メトリクス収集**: プロキシ性能・ビジネス指標の自動収集
-- **設定外部化**: 環境変数・設定ファイルによる環境固有設定
+- **メトリクス収集**: プロキシ性能・通信指標の自動収集
+- **設定外部化**: 環境変数による環境固有設定（APIキー、エンドポイントなど）
 - **エラーハンドリング**: Azure API例外の一元管理と適切なエラーレスポンス
 
-## 2. 層構造設計
+## 2. プロキシサーバー層構造設計
 
 ### 2.1 プロキシサーバー構造
 ```
@@ -42,24 +54,22 @@ src/
 │   ├── interfaces/       # アプリケーション層インターフェース
 │   └── dto/             # データ転送オブジェクト
 ├── domain/               # ドメイン層
-│   ├── entities/         # 音声記録エンティティ
+│   ├── entities/         # エンティティ（セッション、プロキシログなど）
 │   ├── value_objects/    # 値オブジェクト
-│   ├── repositories/     # リポジトリインターフェース
 │   ├── services/         # ドメインサービス
 │   └── exceptions/       # ドメイン例外
 ├── infrastructure/       # インフラストラクチャ層
-│   ├── persistence/      # 音声データ永続化
-│   ├── external/         # Azure OpenAI API クライアント
-│   ├── proxy/           # プロキシ実装
-│   └── configuration/    # 設定管理
+│   ├── http/            # HTTPクライアント実装
+│   ├── azure/           # Azure OpenAI API クライアント
+│   ├── configuration/   # 設定管理
+│   └── logging/         # ログ実装
 ├── presentation/         # プレゼンテーション層
 │   ├── api/             # プロキシ API エンドポイント
 │   ├── middleware/      # プロキシミドルウェア
 │   └── dto/             # API データ転送オブジェクト
 └── shared/              # 共通コンポーネント
-    ├── logging/         # ログ管理
-    ├── monitoring/      # メトリクス・ヘルスチェック
     ├── security/        # セキュリティ（APIキー管理）
+    ├── monitoring/      # メトリクス・ヘルスチェック
     └── utils/           # ユーティリティ
 ```
 
@@ -75,118 +85,124 @@ src/
 #### 2.2.2 主要コンポーネント
 
 ```python
-# presentation/api/controllers/proxy_controller.py
-from abc import ABC, abstractmethod
-from dependency_injector.wiring import Provide, inject
-from fastapi import APIRouter, HTTPException, Depends
+# presentation/api/controllers/sessions_proxy_controller.py
+from fastapi import APIRouter, HTTPException, Request, Header
 from application.interfaces.azure_proxy_service import IAzureProxyService
 from presentation.dto.proxy_dto import SessionCreateRequest, SessionCreateResponse
 
-class AzureSessionsProxyController:
+class SessionsProxyController:
     """Azure OpenAI Sessions API プロキシコントローラー"""
     
     def __init__(self, azure_proxy_service: IAzureProxyService):
         self._azure_proxy_service = azure_proxy_service
-        self.router = APIRouter(prefix="/sessions", tags=["azure-proxy"])
+        self.router = APIRouter(prefix="/sessions", tags=["sessions-proxy"])
         self._setup_routes()
     
     def _setup_routes(self):
         """ルート設定"""
         self.router.add_api_route("/", self.create_session_proxy, methods=["POST"], status_code=201)
     
-    @inject
     async def create_session_proxy(
         self,
         request: SessionCreateRequest,
-        azure_proxy_service: IAzureProxyService = Provide["azure_proxy_service"]
+        api_key: Optional[str] = Header(None, alias="api-key")  # フロントエンドから受信するが無視
     ) -> SessionCreateResponse:
         """Azure OpenAI Sessions API プロキシエンドポイント"""
         try:
-            # フロントエンドからのリクエストをAzure OpenAI APIにプロキシ
-            azure_response = await azure_proxy_service.create_session_proxy(request)
+            # フロントエンドからのapi-keyヘッダーは無視し、サーバー環境変数を使用
+            azure_response = await self._azure_proxy_service.create_session_proxy(request)
             return SessionCreateResponse.from_azure_response(azure_response)
         except Exception as e:
-            self._logger.error(f"Azure Sessions API proxy error: {str(e)}")
-            raise HTTPException(status_code=502, detail="Azure OpenAI API error")
+            logger.error(f"Sessions API proxy error: {str(e)}")
+            raise HTTPException(status_code=502, detail="Azure OpenAI Sessions API error")
 
-class AzureWebRTCProxyController:
+# presentation/api/controllers/realtime_proxy_controller.py
+from fastapi import APIRouter, HTTPException, Query, Header, Request
+from starlette.responses import Response
+
+class RealtimeProxyController:
     """Azure OpenAI WebRTC API プロキシコントローラー"""
     
     def __init__(self, azure_proxy_service: IAzureProxyService):
         self._azure_proxy_service = azure_proxy_service
-        self.router = APIRouter(prefix="/realtime", tags=["webrtc-proxy"])
+        self.router = APIRouter(prefix="/realtime", tags=["realtime-proxy"])
         self._setup_routes()
     
     def _setup_routes(self):
         """ルート設定"""
         self.router.add_api_route("/", self.webrtc_sdp_proxy, methods=["POST"])
     
-    @inject
     async def webrtc_sdp_proxy(
         self,
-        model: str = Query(...),
-        ephemeral_key: str = Header(..., alias="Authorization"),
-        sdp_offer: str = Body(..., media_type="application/sdp"),
-        azure_proxy_service: IAzureProxyService = Provide["azure_proxy_service"]
-    ) -> str:
+        request: Request,
+        model: str = Query(..., description="AI model name"),
+        authorization: str = Header(..., alias="Authorization")
+    ) -> Response:
         """Azure OpenAI WebRTC SDP プロキシエンドポイント"""
         try:
             # Bearer tokenからephemeral_keyを抽出
-            if not ephemeral_key.startswith("Bearer "):
-                raise HTTPException(status_code=401, detail="Invalid authorization header")
-            key = ephemeral_key[7:]
+            if not authorization.startswith("Bearer "):
+                raise HTTPException(status_code=401, detail="Invalid authorization header format")
+            
+            ephemeral_key = authorization[7:]  # "Bearer "を除去
+            
+            # SDP Offer取得
+            sdp_offer = await request.body()
+            sdp_offer_text = sdp_offer.decode('utf-8')
             
             # Azure OpenAI WebRTC APIにプロキシ
-            sdp_answer = await azure_proxy_service.webrtc_sdp_proxy(model, key, sdp_offer)
+            sdp_answer = await self._azure_proxy_service.webrtc_sdp_proxy(
+                model=model, 
+                ephemeral_key=ephemeral_key, 
+                sdp_offer=sdp_offer_text
+            )
+            
             return Response(content=sdp_answer, media_type="application/sdp")
             
         except Exception as e:
-            self._logger.error(f"Azure WebRTC API proxy error: {str(e)}")
+            logger.error(f"WebRTC API proxy error: {str(e)}")
             raise HTTPException(status_code=502, detail="Azure WebRTC API error")
 
-# presentation/api/controllers/audio_controller.py
-class AudioController:
-    """音声データ管理APIコントローラー"""
+# presentation/middleware/cors_middleware.py
+from fastapi.middleware.cors import CORSMiddleware
+
+def setup_cors_middleware(app: FastAPI, frontend_origins: list[str]):
+    """CORS ミドルウェア設定"""
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=frontend_origins,  # ["http://localhost:3000"]
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["*"],
+    )
+
+# presentation/middleware/logging_middleware.py
+import time
+from fastapi import Request, Response
+
+async def logging_middleware(request: Request, call_next):
+    """リクエストログミドルウェア"""
+    start_time = time.time()
     
-    def __init__(self, audio_service: IAudioService):
-        self._audio_service = audio_service
-        self.router = APIRouter(prefix="/audio", tags=["audio"])
-        self._setup_routes()
+    # リクエストログ
+    logger.info(f"Request: {request.method} {request.url}")
     
-    def _setup_routes(self):
-        """ルート設定"""
-        self.router.add_api_route("/session/{session_id}", self.get_session_audio, methods=["GET"])
-        self.router.add_api_route("/{audio_id}", self.get_audio, methods=["GET"])
+    response = await call_next(request)
     
-    @inject
-    async def get_session_audio(
-        self,
-        session_id: str,
-        audio_type: Optional[str] = None,
-        limit: int = 50,
-        offset: int = 0,
-        audio_service: IAudioService = Provide["audio_service"]
-    ) -> SessionAudioResponse:
-        """セッション音声ファイル一覧取得エンドポイント"""
-        try:
-            result = await audio_service.get_session_audio_files(
-                session_id=session_id, 
-                audio_type=audio_type, 
-                limit=limit, 
-                offset=offset
-            )
-            return SessionAudioResponse.from_domain(result)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail="Audio retrieval error")
+    # レスポンスログ
+    process_time = time.time() - start_time
+    logger.info(f"Response: {response.status_code} - {process_time:.4f}s")
+    
+    return response
 ```
 
 ### 2.3 アプリケーション層 (Application Layer)
 
 #### 2.3.1 責任
-- Azure OpenAI APIプロキシ処理
-- 音声データ自動保存の調整
+- Azure OpenAI APIプロキシ処理の調整
 - ビジネスロジックの調整
 - 外部サービス連携の調整
+- エラーハンドリングとリトライ
 
 #### 2.3.2 主要コンポーネント
 
@@ -194,10 +210,63 @@ class AudioController:
 # application/services/azure_proxy_service.py
 from abc import ABC, abstractmethod
 from application.dto.azure_dto import AzureSessionRequest, AzureSessionResponse
-from infrastructure.external.azure_openai_client import IAzureOpenAIClient
+from infrastructure.azure.azure_openai_client import IAzureOpenAIClient
 
 class IAzureProxyService(ABC):
     """Azure OpenAI プロキシサービスインターフェース"""
+    
+    @abstractmethod
+    async def create_session_proxy(self, request: SessionCreateRequest) -> AzureSessionResponse:
+        """セッション作成リクエストをAzure OpenAI APIにプロキシ"""
+        pass
+    
+    @abstractmethod
+    async def webrtc_sdp_proxy(self, model: str, ephemeral_key: str, sdp_offer: str) -> str:
+        """WebRTC SDP リクエストをAzure OpenAI APIにプロキシ"""
+        pass
+
+class AzureProxyService(IAzureProxyService):
+    """Azure OpenAI プロキシサービス実装"""
+    
+    def __init__(self, azure_client: IAzureOpenAIClient, logger: Logger):
+        self._azure_client = azure_client
+        self._logger = logger
+    
+    async def create_session_proxy(self, request: SessionCreateRequest) -> AzureSessionResponse:
+        """セッション作成プロキシ処理"""
+        try:
+            self._logger.info(f"Proxying session creation: model={request.model}, voice={request.voice}")
+            
+            # Azure OpenAI Sessions APIにリクエスト転送
+            azure_request = AzureSessionRequest.from_frontend_request(request)
+            azure_response = await self._azure_client.create_session(azure_request)
+            
+            self._logger.info(f"Session created successfully: session_id={azure_response.id}")
+            return azure_response
+            
+        except Exception as e:
+            self._logger.error(f"Session creation proxy failed: {str(e)}")
+            raise
+    
+    async def webrtc_sdp_proxy(self, model: str, ephemeral_key: str, sdp_offer: str) -> str:
+        """WebRTC SDP プロキシ処理"""
+        try:
+            self._logger.info(f"Proxying WebRTC SDP: model={model}")
+            
+            # Azure OpenAI WebRTC APIにSDP Offer転送
+            sdp_answer = await self._azure_client.exchange_sdp(
+                model=model,
+                ephemeral_key=ephemeral_key,
+                sdp_offer=sdp_offer
+            )
+            
+            self._logger.info("WebRTC SDP exchange successful")
+            return sdp_answer
+            
+        except Exception as e:
+            self._logger.error(f"WebRTC SDP proxy failed: {str(e)}")
+            raise
+```
     
     @abstractmethod
     async def create_session_proxy(self, request: SessionCreateRequest) -> AzureSessionResponse:
