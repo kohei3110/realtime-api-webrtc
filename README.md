@@ -64,6 +64,75 @@ Your app is ready to be deployed!
 - `changeBackgroundColor`: Changes the background color of the page
 - `changeTextColor`: Changes the text color of the page
 
+## Container Deployment
+
+This project can be run using Docker containers for both development and production environments.
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- Azure OpenAI API credentials
+
+### Container Setup and Deployment
+
+1. **Create Environment Variables File**
+
+   Create a `.env` file at the project root:
+
+   ```bash
+   # Azure OpenAI API Settings
+   AZURE_OPENAI_API_KEY=your-api-key
+   AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+   AZURE_OPENAI_API_VERSION=2024-10-01-preview
+   ```
+
+2. **Build and Start Containers**
+
+   ```bash
+   # Build and run all services
+   docker compose up --build
+
+   # Or use the provided script
+   ./run_project.sh
+   ```
+
+3. **Run Backend Only**
+
+   ```bash
+   # Start only the backend service
+   docker compose up backend
+
+   # Or use the backend script
+   cd backend
+   ./run_docker.sh
+   ```
+
+### Container Management
+
+```bash
+# Check running services
+docker compose ps
+
+# View logs
+docker compose logs -f
+
+# View specific service logs
+docker compose logs -f backend
+
+# Stop all services
+docker compose down
+
+# Completely remove containers, images, and volumes
+docker compose down --rmi all --volumes
+```
+
+### Access Services
+
+- **Backend API**: http://localhost:8000
+- **API Documentation**: http://localhost:8000/docs
+- **Health Check**: http://localhost:8000/health
+- **Frontend** (when enabled): http://localhost:3000
+
 ## Production Deployment
 
 For a production environment:
