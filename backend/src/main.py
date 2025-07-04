@@ -24,7 +24,7 @@ def create_app() -> FastAPI:
         description="Azure OpenAI Realtime API プロキシサーバー",
         version="0.1.0",
         # トレイリングスラッシュの有無に関わらず同じハンドラーを使用
-        redirect_slashes=False
+        redirect_slashes=True
     )
     
     # CORS設定
