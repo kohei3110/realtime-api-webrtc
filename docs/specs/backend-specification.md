@@ -14,6 +14,7 @@
 - セッション管理とユーザー認証
 
 ### 1.3 技術スタック
+- **ランタイム**: Python 3.13
 - **フレームワーク**: Python FastAPI
 - **WebSocket**: FastAPI WebSocket support
 - **WebRTC**: aiortc (Python WebRTC library)
@@ -23,7 +24,13 @@
 
 ## 2. システム要件
 
-### 2.1 機能要件
+### 2.1 ランタイム要件
+- **Python**: 3.13以上
+- **OS**: Linux (推奨: Ubuntu 22.04 LTS)
+- **メモリ**: 最小2GB、推奨4GB以上
+- **CPU**: 最小2コア、推奨4コア以上
+
+### 2.2 機能要件
 - リアルタイム双方向音声通信
 - WebRTC P2P接続のシグナリング
 - Azure OpenAI APIとの統合
@@ -32,7 +39,7 @@
 - セッション管理
 - エラーハンドリングとログ記録
 
-### 2.2 非機能要件
+### 2.3 非機能要件
 - **可用性**: 99.9%
 - **レスポンス時間**: WebRTC シグナリング < 100ms
 - **スループット**: 同時接続数 1000セッション
@@ -1148,7 +1155,7 @@ class AudioProcessingPipeline:
 
 ### 6.1 Dockerfile
 ```dockerfile
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 WORKDIR /app
 
