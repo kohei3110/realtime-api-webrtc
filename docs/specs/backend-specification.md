@@ -159,15 +159,18 @@ Content-Type: application/json
 ```json
 {
   "id": "sess_001T4brAO1EhxMhTN6DbHEEW",
+  "object": "realtime.session",
+  "model": "gpt-4o-realtime-preview",
+  "expires_at": 0,
   "client_secret": {
     "value": "ek_001T4bkjBqkGVq8ysnKjLAOU",
-    "expires_at": "2024-12-05T01:00:00.000Z"
+    "expires_at": 1751629158
   }
 }
 ```
 
 **ステータスコード**:
-- `201`: セッション作成成功
+- `200`: セッション作成成功
 - `400`: リクエスト形式エラー
 - `401`: Azure API認証エラー
 - `429`: レート制限超過

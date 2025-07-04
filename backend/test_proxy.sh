@@ -68,10 +68,12 @@ test_session_creation() {
             session_id=$(jq -r '.id' /tmp/session_response.json 2>/dev/null || echo "N/A")
             model=$(jq -r '.model' /tmp/session_response.json 2>/dev/null || echo "N/A")
             expires_at=$(jq -r '.expires_at' /tmp/session_response.json 2>/dev/null || echo "N/A")
+            ephemeral_key=$(jq -r '.client_secret.value' /tmp/session_response.json 2>/dev/null || echo "N/A")
             
             log_success "🆔 Session ID: $session_id"
             log_success "🤖 Model: $model"
             log_success "⏰ Expires At: $expires_at"
+            log_success "🔑 Ephemeral Key: ${ephemeral_key:0:10}..." # Show only first 10 chars for security
         else
             log_info "📄 Full Response: $(cat /tmp/session_response.json)"
             log_info "💡 Install 'jq' for better JSON parsing"

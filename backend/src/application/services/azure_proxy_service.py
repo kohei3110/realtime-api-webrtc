@@ -47,7 +47,8 @@ class AzureProxyService(IAzureProxyService):
                 id=azure_response.id,
                 object=azure_response.object,
                 model=azure_response.model,
-                expires_at=azure_response.expires_at
+                expires_at=azure_response.expires_at,
+                client_secret=azure_response.client_secret  # client_secretを含める
             )
             
             self.logger.info(f"Session proxy completed successfully: {response.id}")

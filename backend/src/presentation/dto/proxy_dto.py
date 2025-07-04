@@ -31,6 +31,7 @@ class SessionCreateResponse(BaseModel):
     object: str = Field(..., description="Object type")
     model: str = Field(..., description="Model name")
     expires_at: Optional[int] = Field(None, description="Session expiration timestamp")
+    client_secret: Optional[Dict[str, Any]] = Field(None, description="Client secret for WebRTC connection")
     
     class Config:
         json_schema_extra = {
@@ -38,7 +39,11 @@ class SessionCreateResponse(BaseModel):
                 "id": "sess_001T4brAO1EhxMhTN6DbHEEW",
                 "object": "realtime.session",
                 "model": "gpt-4o-realtime-preview",
-                "expires_at": 1704067200
+                "expires_at": 1704067200,
+                "client_secret": {
+                    "value": "ek_001T4bkjBqkGVq8ysnKjLAOU",
+                    "expires_at": 1751629158
+                }
             }
         }
 
