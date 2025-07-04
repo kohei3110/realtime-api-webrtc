@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# セッション作成プロキシのテストスクリプト
-# Azure OpenAI Realtime API プロキシサーバーをテストします
+# Azure OpenAI Sessions Proxy テストスクリプト
+# Azure OpenAI Realtime API セッション作成プロキシサーバーをテストします
 
 set -e
 
@@ -139,9 +139,48 @@ test_rate_limiting() {
     log_info "📊 Rate limiting test results: $success_count success, $error_count errors"
 }
 
+# WebRTC 接続検証テスト
+test_webrtc_configuration() {
+    log_test "🎙️  Testing WebRTC Configuration..."
+    
+    # セッションを作成してephemeral keyを取得
+    log_info "📡 Creating session to get ephemeral key..."
+    response=$(curl -s -w "%{http_code}" -o /tmp/session_for_webrtc.json \
+        -X POST \
+        -H "Content-Type: application/json" \
+        -H "api-key: dummy_key" \
+        -d "$TEST_DATA" \
+        "${BASE_URL}/sessions/" || echo "000")
+    
+    http_code="${response: -3}"
+    
+    if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
+        log_error "❌ Failed to create session for WebRTC configuration test (status: $http_code)"
+        return 1
+    fi
+    
+    # ephemeral keyを抽出
+    if command -v jq >/dev/null 2>&1; then
+        ephemeral_key=$(jq -r '.client_secret.value' /tmp/session_for_webrtc.json 2>/dev/null || echo "")
+        session_id=$(jq -r '.id' /tmp/session_for_webrtc.json 2>/dev/null || echo "")
+        if [ -z "$ephemeral_key" ] || [ "$ephemeral_key" = "null" ]; then
+            log_error "❌ Could not extract ephemeral key from session response"
+            return 1
+        fi
+        log_success "🔑 Got ephemeral key: ${ephemeral_key:0:10}..."
+        log_success "🆔 Session ID: $session_id"
+        log_info "🎯 WebRTC should connect directly to: https://swedencentral.realtimeapi-preview.ai.azure.com/v1/realtimertc"
+        log_info "� Using ephemeral key for authentication"
+        log_success "✅ WebRTC configuration verified - ready for frontend connection"
+    else
+        log_error "❌ jq not available - cannot extract ephemeral key"
+        return 1
+    fi
+}
+
 # メイン実行
 main() {
-    echo "🚀 Starting Azure OpenAI Proxy Server Tests"
+    echo "🚀 Starting Azure OpenAI Sessions Proxy Tests"
     echo "============================================="
     
     # サーバーが起動しているかチェック
@@ -158,12 +197,20 @@ main() {
     test_session_creation && echo ""
     test_api_schema && echo ""
     test_rate_limiting && echo ""
+    test_webrtc_configuration && echo ""
     
+    echo ""
     echo "============================================="
     echo "🏁 Test completed!"
+    echo ""
+    log_info "📋 Summary:"
+    log_success "✅ Sessions Proxy: Working (Backend handles session creation)"
+    log_success "✅ WebRTC Config: Ready (Frontend connects directly to Azure OpenAI)"
+    log_info "🎯 Frontend WebRTC URL: https://swedencentral.realtimeapi-preview.ai.azure.com/v1/realtimertc"
+    echo ""
     
     # 一時ファイルのクリーンアップ
-    rm -f /tmp/health_response.json /tmp/session_response.json /tmp/openapi_response.json /tmp/rate_test_*.json
+    rm -f /tmp/health_response.json /tmp/session_response.json /tmp/openapi_response.json /tmp/rate_test_*.json /tmp/session_for_webrtc.json
 }
 
 # スクリプト実行

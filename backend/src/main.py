@@ -15,7 +15,6 @@ if env_path.exists():
 from presentation.middleware.cors_middleware import setup_cors_middleware
 from presentation.api.controllers.health_controller import HealthController
 from presentation.api.controllers.sessions_proxy_controller import SessionsProxyController
-from presentation.api.controllers.realtime_proxy_controller import RealtimeProxyController
 from shared.monitoring.health import HealthCheckService, SimpleHealthCheck
 from shared.utils.logging import setup_logging, get_logger
 
@@ -61,10 +60,6 @@ def create_app() -> FastAPI:
         sessions_controller = SessionsProxyController()
         app.include_router(sessions_controller.router)
         logger.info("Sessions proxy controller registered")
-        
-        realtime_controller = RealtimeProxyController()
-        app.include_router(realtime_controller.router)
-        logger.info("Realtime proxy controller registered")
     except Exception as e:
         logger.error(f"Failed to register proxy controllers: {e}")
         raise
