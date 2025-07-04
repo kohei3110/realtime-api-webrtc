@@ -26,24 +26,6 @@ class IAzureOpenAIClient(ABC):
         pass
     
     @abstractmethod
-    async def proxy_webrtc_sdp(self, model: str, ephemeral_key: str, sdp_offer: str) -> str:
-        """WebRTC SDP Offer をプロキシする
-        
-        Args:
-            model: Azure OpenAI model name
-            ephemeral_key: セッションからのephemeral key
-            sdp_offer: WebRTC SDP Offer
-            
-        Returns:
-            WebRTC SDP Answer
-            
-        Raises:
-            AzureOpenAIException: Azure API エラー
-            ConnectionError: 接続エラー
-        """
-        pass
-    
-    @abstractmethod
     async def health_check(self) -> Dict[str, Any]:
         """Azure OpenAI APIの接続確認
         
@@ -175,46 +157,6 @@ class AzureOpenAIClient(IAzureOpenAIClient):
             raise AzureOpenAIException(error_msg)
         except asyncio.TimeoutError:
             error_msg = "Azure OpenAI request timeout"
-            self.logger.error(error_msg)
-            raise AzureOpenAIException(error_msg)
-    
-    async def proxy_webrtc_sdp(self, model: str, ephemeral_key: str, sdp_offer: str) -> str:
-        """WebRTC SDP Offer をプロキシする"""
-        url = f"{self.endpoint}/openai/realtime"
-        headers = {
-            "Authorization": f"Bearer {ephemeral_key}",
-            "Content-Type": "application/sdp"
-        }
-        params = {
-            "model": model,
-            "api-version": self.api_version
-        }
-        
-        self.logger.info(f"Proxying WebRTC SDP for model: {model}")
-        
-        try:
-            async with aiohttp.ClientSession(
-                connector=self.connector,
-                timeout=self.timeout
-            ) as session:
-                async with session.post(
-                    url,
-                    headers=headers,
-                    params=params,
-                    data=sdp_offer
-                ) as response:
-                    if response.status != 200:
-                        error_text = await response.text()
-                        error_msg = f"WebRTC SDP proxy failed: {response.status} - {error_text}"
-                        self.logger.error(error_msg)
-                        raise AzureOpenAIException(error_msg, status_code=response.status)
-                    
-                    sdp_answer = await response.text()
-                    self.logger.info("WebRTC SDP Answer received successfully")
-                    return sdp_answer
-                    
-        except aiohttp.ClientError as e:
-            error_msg = f"Azure OpenAI WebRTC connection error: {str(e)}"
             self.logger.error(error_msg)
             raise AzureOpenAIException(error_msg)
     

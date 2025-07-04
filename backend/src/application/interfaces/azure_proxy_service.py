@@ -22,20 +22,3 @@ class IAzureProxyService(ABC):
             HTTPException: プロキシ処理中のエラー
         """
         pass
-    
-    @abstractmethod
-    async def webrtc_sdp_proxy(self, model: str, ephemeral_key: str, sdp_offer: str) -> str:
-        """WebRTC SDP Offer をAzure OpenAI APIにプロキシ
-        
-        Args:
-            model: Azure OpenAI model name
-            ephemeral_key: セッションからのephemeral key
-            sdp_offer: WebRTC SDP Offer
-            
-        Returns:
-            Azure OpenAI APIからのSDP Answer
-            
-        Raises:
-            HTTPException: プロキシ処理中のエラー
-        """
-        pass
