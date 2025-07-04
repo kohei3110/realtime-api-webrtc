@@ -3,241 +3,92 @@
 ## 1. 概要
 
 ### 1.1 API 概要
-本APIは、React WebアプリケーションとAzure OpenAI Realtime APIを仲介するプロキシAPIです。WebRTCによるリアルタイム音声通信のシグナリングと、ユーザー発話音声データの自動保存機能を提供します。
+本APIは、React WebアプリケーションとAzure OpenAI Realtime APIを仲介するプロキシサーバーです。フロントエンドからのリクエストを安全にAzure OpenAI Realtime APIにプロキシし、WebRTCによるリアルタイム音声通信とユーザー発話音声データの自動保存機能を提供します。
 
 ### 1.2 ベースURL
 ```
-https://localhost:8000/api/v1
+http://localhost:8000
 ```
 
 ### 1.3 認証方式
-- **セッション認証**: ephemeral key による一時認証
-- **API認証**: Bearer token (ephemeral key)
-- **WebSocket認証**: Query parameter または WebSocket header
+- **プロキシ認証**: APIキーはバックエンドで管理（フロントエンドには露出しない）
+- **セッション認証**: プロキシが生成したephemeral keyによる認証
+- **セキュア設計**: Azure APIキーをフロントエンドから隠蔽
 
 ### 1.4 レスポンス形式
 - **Content-Type**: `application/json`
 - **文字エンコーディング**: UTF-8
 - **日時形式**: ISO 8601 (例: `2024-01-01T00:00:00Z`)
 
-## 2. WebRTC Realtime API
+## 2. プロキシ API
 
-### 2.1 セッション管理
+### 2.1 セッション管理プロキシ
 
-#### 2.1.1 セッション作成
+#### 2.1.1 セッション作成プロキシ
 
 **エンドポイント**
 ```
-POST /realtime/sessions
+POST /sessions
 ```
+
+**説明**
+フロントエンドからのリクエストをAzure OpenAI Realtime Sessions APIにプロキシし、安全にephemeral keyを取得します。
 
 **リクエスト**
 ```json
 {
-  "user_id": "string",
   "model": "gpt-4o-realtime-preview",
-  "voice": "alloy",
-  "instructions": "あなたはとても優秀なAIアシスタントです。会話内容に対して、非常にナチュラルな返事をします。",
-  "modalities": ["text", "audio"],
-  "tools": [
-    {
-      "type": "function",
-      "name": "changeBackgroundColor",
-      "description": "Changes the background color of a web page",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "color": {
-            "type": "string",
-            "description": "A hex value of the color"
-          }
-        },
-        "required": ["color"]
-      }
-    },
-    {
-      "type": "function",
-      "name": "getPageHTML",
-      "description": "Gets the HTML for the current page"
-    }
-  ]
+  "voice": "alloy"
 }
 ```
 
 **フィールド説明**
-- `user_id` (string, required): ユーザー識別子
 - `model` (string, required): 使用するAIモデル名
   - 利用可能値: `gpt-4o-realtime-preview`
 - `voice` (string, required): AI音声の種類
   - 利用可能値: `alloy`, `shimmer`, `nova`, `echo`, `fable`, `onyx`
-- `instructions` (string, optional): AIへの指示文
-- `modalities` (array, required): 通信モダリティ
-  - 利用可能値: `["text", "audio"]`
-- `tools` (array, optional): 利用可能な関数定義
 
 **レスポンス**
 ```json
 {
-  "session_id": "uuid",
-  "ephemeral_key": "string",
-  "webrtc_endpoint": "wss://localhost:8000/api/v1/realtime/webrtc/{session_id}",
+  "id": "azure_session_id",
+  "client_secret": {
+    "value": "ephemeral_key_value"
+  },
   "created_at": "2024-01-01T00:00:00Z",
   "expires_at": "2024-01-01T01:00:00Z"
 }
 ```
 
 **フィールド説明**
-- `session_id` (string): セッション識別子（UUID）
-- `ephemeral_key` (string): 一時認証キー（WebRTC接続用）
-- `webrtc_endpoint` (string): WebSocket接続エンドポイント
+- `id` (string): Azure OpenAIから取得したセッション識別子
+- `client_secret.value` (string): Azure OpenAIから取得したephemeral key
 - `created_at` (string): セッション作成日時
 - `expires_at` (string): セッション有効期限
 
 **ステータスコード**
 - `201`: セッション作成成功
 - `400`: リクエスト形式エラー
-- `401`: 認証エラー
 - `429`: レート制限超過
-- `500`: サーバーエラー
+- `500`: Azure OpenAI APIエラー
+- `503`: プロキシサーバーエラー
 
-#### 2.1.2 セッション取得
-
-**エンドポイント**
-```
-GET /realtime/sessions/{session_id}
-```
-
-**パスパラメータ**
-- `session_id` (string, required): セッション識別子
-
-**レスポンス**
-```json
-{
-  "session_id": "uuid",
-  "status": "active",
-  "created_at": "2024-01-01T00:00:00Z",
-  "expires_at": "2024-01-01T01:00:00Z",
-  "user_id": "string",
-  "model": "gpt-4o-realtime-preview",
-  "voice": "alloy",
-  "connection_state": "connected",
-  "audio_files_count": 5,
-  "total_duration": 120.5,
-  "last_activity": "2024-01-01T00:05:00Z"
-}
-```
-
-**フィールド説明**
-- `status` (string): セッション状態
-  - 利用可能値: `active`, `inactive`, `terminated`, `expired`
-- `connection_state` (string): WebRTC接続状態
-  - 利用可能値: `connected`, `disconnected`, `connecting`, `failed`
-- `audio_files_count` (number): 保存された音声ファイル数
-- `total_duration` (number): 総会話時間（秒）
-- `last_activity` (string): 最終アクティビティ日時
-
-**ステータスコード**
-- `200`: 取得成功
-- `404`: セッション未発見
-- `500`: サーバーエラー
-
-#### 2.1.3 セッション一覧取得
+#### 2.1.2 WebRTC SDP プロキシ
 
 **エンドポイント**
 ```
-GET /realtime/sessions
+POST /realtime?model={model}
 ```
+
+**説明**
+フロントエンドからのSDP OfferをAzure OpenAI WebRTC エンドポイントにプロキシします。
 
 **クエリパラメータ**
-- `user_id` (string, optional): ユーザーIDでフィルタ
-- `status` (string, optional): ステータスでフィルタ
-- `limit` (number, optional): 取得件数制限（デフォルト: 20, 最大: 100）
-- `offset` (number, optional): オフセット（デフォルト: 0）
-
-**レスポンス**
-```json
-{
-  "sessions": [
-    {
-      "session_id": "uuid",
-      "status": "active",
-      "created_at": "2024-01-01T00:00:00Z",
-      "user_id": "string",
-      "model": "gpt-4o-realtime-preview",
-      "voice": "alloy",
-      "connection_state": "connected",
-      "audio_files_count": 5,
-      "total_duration": 120.5
-    }
-  ],
-  "pagination": {
-    "total_count": 1,
-    "active_count": 1,
-    "limit": 20,
-    "offset": 0,
-    "has_more": false
-  }
-}
-```
-
-**ステータスコード**
-- `200`: 取得成功
-- `400`: クエリパラメータエラー
-- `500`: サーバーエラー
-
-#### 2.1.4 セッション終了
-
-**エンドポイント**
-```
-DELETE /realtime/sessions/{session_id}
-```
-
-**パスパラメータ**
-- `session_id` (string, required): セッション識別子
+- `model` (string, required): 使用するAIモデル名
 
 **ヘッダー**
 - `Authorization: Bearer {ephemeral_key}` (required)
-
-**レスポンス**
-```json
-{
-  "session_id": "uuid",
-  "status": "terminated",
-  "terminated_at": "2024-01-01T00:30:00Z",
-  "cleanup_completed": true,
-  "final_stats": {
-    "total_duration": 1800.5,
-    "audio_files_saved": 25,
-    "total_audio_size": 15728640
-  }
-}
-```
-
-**フィールド説明**
-- `cleanup_completed` (boolean): リソースクリーンアップ完了フラグ
-- `final_stats` (object): セッション終了時の統計情報
-
-**ステータスコード**
-- `200`: 終了成功
-- `401`: 認証エラー
-- `404`: セッション未発見
-- `500`: サーバーエラー
-
-### 2.2 WebRTC 接続
-
-#### 2.2.1 SDP Offer 交換
-
-**エンドポイント**
-```
-POST /realtime/webrtc/{session_id}/offer
-```
-
-**パスパラメータ**
-- `session_id` (string, required): セッション識別子
-
-**ヘッダー**
 - `Content-Type: application/sdp` (required)
-- `Authorization: Bearer {ephemeral_key}` (required)
 
 **リクエストボディ（SDP Offer）**
 ```
@@ -265,138 +116,255 @@ a=fmtp:111 minptime=10;useinbandfec=1
 ...
 ```
 
+**プロキシ処理フロー**
+1. フロントエンドからSDP Offer受信
+2. ephemeral key検証
+3. Azure OpenAI WebRTC エンドポイントに転送
+4. Azure OpenAIからSDP Answer受信
+5. フロントエンドにレスポンス返却
+
 **ステータスコード**
 - `200`: SDP交換成功
 - `400`: 不正なSDP形式
-- `401`: 認証エラー
-- `404`: セッション未発見
+- `401`: 認証エラー（ephemeral key無効）
 - `422`: SDP処理エラー
-- `500`: サーバーエラー
+- `500`: Azure OpenAI APIエラー
+- `503`: プロキシサーバーエラー
+### 2.2 データチャネルプロキシ（WebRTC）
 
-#### 2.2.2 WebSocket 接続
+#### 2.2.1 データチャネル通信の透過的プロキシ
 
-**エンドポイント**
+**説明**
+WebRTC接続確立後、フロントエンドとAzure OpenAI間のデータチャネル通信を透過的にプロキシします。プロキシサーバーは通信内容を監視し、音声データの自動保存機能を提供します。
+
+**通信フロー**
 ```
-wss://localhost:8000/api/v1/realtime/webrtc/{session_id}
-```
-
-**接続時認証**
-- Query Parameter: `?ephemeral_key={key}`
-- WebSocket Header: `Authorization: Bearer {ephemeral_key}`
-
-**接続確立フロー**
-1. WebSocket接続要求
-2. ephemeral_key検証
-3. セッション有効性確認
-4. Azure OpenAI WebSocketへのプロキシ接続確立
-5. 双方向メッセージプロキシ開始
-
-**メッセージ形式**
-WebSocketを通じて送受信されるメッセージは、Azure OpenAI Realtime APIの仕様に準拠します。
-
-**送信メッセージ例（session.update）**
-```json
-{
-  "type": "session.update",
-  "session": {
-    "instructions": "あなたはとても優秀なAIアシスタントです。",
-    "modalities": ["text", "audio"],
-    "tools": [...]
-  }
-}
+Frontend ←→ Proxy Server ←→ Azure OpenAI
 ```
 
-**受信メッセージ例（response.audio.delta）**
-```json
-{
-  "type": "response.audio.delta",
-  "response_id": "resp_001",
-  "item_id": "item_001",
-  "output_index": 0,
-  "content_index": 0,
-  "delta": "base64_encoded_audio_data"
-}
-```
+**プロキシ機能**
+1. **メッセージ転送**: フロントエンド ↔ Azure OpenAI間の双方向メッセージ転送
+2. **音声監視**: ユーザー発話イベントの検知と音声データ保存
+3. **ログ記録**: 通信ログの構造化記録
+4. **エラーハンドリング**: 接続エラー時の適切なエラー処理
 
-**接続終了コード**
-- `1000`: 正常終了
-- `1001`: エンドポイント終了
-- `1008`: ポリシー違反（認証エラー）
-- `1011`: サーバーエラー
+**対象メッセージタイプ**
+- `session.update`: セッション設定更新
+- `input_audio_buffer.speech_started`: ユーザー発話開始
+- `input_audio_buffer.speech_stopped`: ユーザー発話終了
+- `response.audio.delta`: AI音声レスポンス
+- `response.function_call_arguments.done`: 関数呼び出し完了
+- `conversation.item.create`: 会話アイテム作成
+
+**音声データ自動保存**
+- **トリガー**: `input_audio_buffer.speech_stopped` イベント
+- **保存先**: Azure Blob Storage
+- **形式**: Opus/WebM（WebRTC標準）
+- **メタデータ**: 発話時間、セッションID、音声品質情報
 
 ## 3. 音声データ管理 API
 
-### 3.1 音声ファイル操作
+### 3.1 自動保存された音声ファイル管理
 
-#### 3.1.1 音声ファイル手動アップロード
+#### 3.1.1 セッション音声ファイル一覧
 
 **エンドポイント**
 ```
-POST /audio/upload
+GET /audio/session/{session_id}
 ```
 
-**ヘッダー**
-- `Content-Type: application/json`
-- `Authorization: Bearer {ephemeral_key}` (optional)
+**説明**
+指定セッションで自動保存された音声ファイルの一覧を取得します。
 
-**リクエスト**
+**パスパラメータ**
+- `session_id` (string, required): Azure OpenAIセッション識別子
+
+**クエリパラメータ**
+- `audio_type` (string, optional): 音声タイプでフィルタ
+  - 利用可能値: `user_speech`, `ai_response`
+- `limit` (number, optional): 取得件数制限（デフォルト: 50, 最大: 200）
+- `offset` (number, optional): オフセット（デフォルト: 0）
+
+**レスポンス**
 ```json
 {
-  "session_id": "string",
-  "audio_data": "base64_encoded_audio",
-  "audio_type": "user_speech",
-  "metadata": {
-    "duration": 30.5,
-    "format": "wav",
-    "sample_rate": 48000,
-    "channels": 1,
-    "speaker": "user",
-    "timestamp_start": "2024-01-01T00:00:00.000Z",
-    "timestamp_end": "2024-01-01T00:00:30.500Z",
-    "confidence_score": 0.95,
-    "language": "ja-JP",
-    "transcription": "こんにちは、今日はいい天気ですね。"
+  "session_id": "azure_session_id",
+  "summary": {
+    "total_count": 15,
+    "total_duration": 450.5,
+    "total_size_bytes": 14400000,
+    "user_speech_count": 10,
+    "ai_response_count": 5,
+    "average_duration": 30.03
+  },
+  "audio_files": [
+    {
+      "audio_id": "uuid",
+      "audio_type": "user_speech",
+      "blob_url": "https://storage.blob.core.windows.net/...",
+      "sas_url": "https://storage.blob.core.windows.net/...?sv=...",
+      "sas_expires_at": "2024-01-01T01:00:00Z",
+      "size_bytes": 960000,
+      "metadata": {
+        "duration": 30.0,
+        "format": "opus",
+        "sample_rate": 48000,
+        "channels": 1,
+        "speaker": "user",
+        "timestamp_start": "2024-01-01T00:00:00.000Z",
+        "timestamp_end": "2024-01-01T00:00:30.000Z",
+        "language": "ja-JP"
+      },
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "offset": 0,
+    "has_more": false
   }
 }
 ```
 
-**フィールド説明**
-- `audio_data` (string, required): Base64エンコードされた音声データ
-- `audio_type` (string, required): 音声ファイルタイプ
-  - 利用可能値: `user_speech`, `ai_response`, `full_conversation`
-- `metadata.duration` (number): 音声時間（秒）
-- `metadata.format` (string): 音声フォーマット
-  - 利用可能値: `wav`, `opus`, `mp3`, `flac`
-- `metadata.speaker` (string): 話者識別
-  - 利用可能値: `user`, `assistant`, `unknown`
-- `metadata.confidence_score` (number, 0.0-1.0): 音声認識信頼度
-- `metadata.transcription` (string, optional): 音声の書き起こしテキスト
+**ステータスコード**
+- `200`: 取得成功
+- `404`: セッション未発見
+- `500`: サーバーエラー
+
+#### 3.1.2 音声ファイル取得
+
+**エンドポイント**
+```
+GET /audio/{audio_id}
+```
+
+**説明**
+指定された音声ファイルの詳細情報とアクセス用URLを取得します。
+
+**パスパラメータ**
+- `audio_id` (string, required): 音声ファイル識別子
+
+**クエリパラメータ**
+- `include_sas` (boolean, optional): SAS URL生成フラグ（デフォルト: true）
+- `sas_expiry_hours` (number, optional): SAS URL有効期限（時間、1-24、デフォルト: 1）
 
 **レスポンス**
 ```json
 {
   "audio_id": "uuid",
-  "blob_url": "https://storage.blob.core.windows.net/audio-records/user-speech/2024/01/01/{session_id}/{audio_id}.wav",
-  "upload_status": "completed",
-  "size_bytes": 1440000,
-  "sas_url": "https://storage.blob.core.windows.net/audio-records/...?sv=2023-01-03&se=2024-01-01T01%3A00%3A00Z&sr=b&sp=r&sig=...",
+  "session_id": "azure_session_id",
+  "audio_type": "user_speech",
+  "blob_url": "https://storage.blob.core.windows.net/...",
+  "sas_url": "https://storage.blob.core.windows.net/...?sv=2023-01-03&se=...",
   "sas_expires_at": "2024-01-01T01:00:00Z",
-  "created_at": "2024-01-01T00:00:00Z"
+  "size_bytes": 960000,
+  "metadata": {
+    "duration": 30.0,
+    "format": "opus",
+    "sample_rate": 48000,
+    "channels": 1,
+    "speaker": "user",
+    "timestamp_start": "2024-01-01T00:00:00.000Z",
+    "timestamp_end": "2024-01-01T00:00:30.000Z",
+    "language": "ja-JP"
+  },
+  "created_at": "2024-01-01T00:00:00Z",
+  "last_accessed": "2024-01-01T00:05:00Z"
 }
 ```
 
-**フィールド説明**
-- `blob_url` (string): Azure Blob Storage の永続URL
-- `sas_url` (string): 一時アクセス用SAS URL（1時間有効）
-- `sas_expires_at` (string): SAS URL有効期限
+**ステータスコード**
+- `200`: 取得成功
+- `404`: 音声ファイル未発見
+- `500`: サーバーエラー
+
+## 4. ヘルスチェック・監視 API
+
+### 4.1 システム状態
+
+#### 4.1.1 ヘルスチェック
+
+**エンドポイント**
+```
+GET /health
+```
+
+**説明**
+プロキシサーバーとAzure OpenAI接続の健全性をチェックします。
+
+**レスポンス**
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00Z",
+  "version": "1.0.0",
+  "uptime_seconds": 86400,
+  "proxy_services": {
+    "azure_openai_sessions": {
+      "status": "healthy",
+      "response_time_ms": 120,
+      "last_check": "2024-01-01T00:00:00Z"
+    },
+    "azure_openai_webrtc": {
+      "status": "healthy",
+      "response_time_ms": 85,
+      "last_check": "2024-01-01T00:00:00Z"
+    },
+    "blob_storage": {
+      "status": "healthy",
+      "response_time_ms": 45,
+      "last_check": "2024-01-01T00:00:00Z"
+    }
+  },
+  "metrics": {
+    "active_proxy_sessions": 12,
+    "total_sessions_today": 89,
+    "audio_files_saved_today": 345,
+    "average_proxy_latency_ms": 15
+  }
+}
+```
 
 **ステータスコード**
-- `201`: アップロード成功
-- `400`: リクエスト形式エラー
-- `413`: ファイルサイズ超過（最大10MB）
-- `422`: 音声データ処理エラー
-- `507`: ストレージ容量不足
-- `500`: サーバーエラー
+- `200`: システム正常
+- `503`: システム異常
+
+## 5. エラーレスポンス仕様
+
+### 5.1 共通エラー形式
+
+```json
+{
+  "error": {
+    "code": "ERROR_CODE",
+    "message": "Human readable error message",
+    "details": {
+      "azure_error": "Azure OpenAI specific error details",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "uuid"
+    }
+  }
+}
+```
+
+### 5.2 プロキシエラーコード一覧
+
+#### 5.2.1 Azure OpenAI プロキシエラー (502, 503)
+- `AZURE_SESSIONS_API_ERROR`: Azure OpenAI Sessions API呼び出しエラー
+- `AZURE_WEBRTC_API_ERROR`: Azure OpenAI WebRTC API呼び出しエラー
+- `AZURE_API_TIMEOUT`: Azure OpenAI API タイムアウト
+- `AZURE_API_RATE_LIMITED`: Azure OpenAI API レート制限
+
+#### 5.2.2 プロキシサーバーエラー (500)
+- `PROXY_INTERNAL_ERROR`: プロキシサーバー内部エラー
+- `SDP_PROXY_ERROR`: SDP プロキシ処理エラー
+- `DATACHANNEL_PROXY_ERROR`: データチャネルプロキシエラー
+- `AUDIO_SAVE_ERROR`: 音声データ保存エラー
+
+#### 5.2.3 認証・リクエストエラー (400, 401)
+- `INVALID_EPHEMERAL_KEY`: 不正なephemeral key
+- `MISSING_MODEL_PARAMETER`: modelパラメータ不足
+- `INVALID_SDP_FORMAT`: SDP形式エラー
 
 #### 3.1.2 音声ファイル取得
 
