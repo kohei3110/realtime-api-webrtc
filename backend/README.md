@@ -2,51 +2,67 @@
 
 Azure OpenAI Realtime APIを安全にプロキシするサーバー。WebRTCによるリアルタイム音声通信とセッション管理をサポート。
 
-## 環境構築
+## 🚀 主要機能
 
-### 前提条件
+- **セキュアなAPIキー管理**: Azure OpenAI APIキーをサーバーサイドで安全に管理
+- **透過的プロキシ**: フロントエンドリクエストの Azure OpenAI API への透明な転送
+- **WebRTC サポート**: リアルタイム音声通信のSDP Offer/Answer プロキシ
+- **構造化ログ**: 運用監視とデバッグのための詳細ログ
+- **ヘルスチェック**: システム状態監視とアラート
+
+## 📋 前提条件
+
 - Python 3.13+
 - uv (高速Pythonパッケージマネージャー)
+- Azure OpenAI リソース（Realtime API 有効）
 
-### uvのインストール
-まだuvをインストールしていない場合は、以下のコマンドでインストールできます：
+## ⚡ 高速セットアップ（uv使用）
 
+### 1. uvのインストール
 ```bash
-# pipを使用してuvをインストール
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# または pip経由
 pip install uv
-
-# または、公式の方法（Linux/macOS）
-curl -sSf https://raw.githubusercontent.com/astral-sh/uv/main/install.sh | bash
-
-# Windows (PowerShell)
-# irm https://raw.githubusercontent.com/astral-sh/uv/main/install.ps1 | iex
 ```
 
-### 環境セットアップ
-
+### 2. プロジェクトセットアップ
 ```bash
 # リポジトリのクローン
-git clone https://github.com/your-username/azure-openai-realtime-api-proxy.git
-cd azure-openai-realtime-api-proxy/backend
+git clone <repository-url>
+cd realtime-api-webrtc/backend
 
-# 仮想環境の作成と依存関係のインストール
-uv venv
-source .venv/bin/activate  # Linux/macOS
-# .venv\Scripts\activate   # Windows
+# 依存関係の自動インストール（仮想環境も自動作成）
+uv sync
 
-# 依存関係のインストール
-uv pip install -e ".[dev]"
+# 開発用依存関係も含めてインストール
+uv sync --extra dev
 ```
 
-## 環境変数設定
-
-`.env`ファイルを作成し、以下の環境変数を設定します：
-
+### 3. 環境変数設定
 ```bash
-# Azure OpenAI API 設定
-AZURE_OPENAI_API_KEY=your-api-key
+# .env.example をコピーして設定
+cp .env.example .env
+
+# .env ファイルを編集
 AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
+AZURE_OPENAI_API_KEY=your-azure-openai-api-key
 AZURE_OPENAI_API_VERSION=2024-10-01-preview
+CORS_ORIGINS=http://localhost:3000
+```
+
+### 4. サーバー起動
+```bash
+# 開発サーバー起動（ホットリロード有効）
+uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# または本番環境向け
+uv run uvicorn src.main:app --host 0.0.0.0 --port 8000 --workers 4
+```
 
 # サーバー設定
 HOST=0.0.0.0

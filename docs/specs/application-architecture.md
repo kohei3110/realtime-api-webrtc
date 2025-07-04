@@ -1406,7 +1406,69 @@ security:
 
 ## 7. 運用・保守性
 
-### 7.1 運用監視項目
+### 7.1 開発環境
+
+#### 7.1.1 Python パッケージ管理
+このプロジェクトでは、Python の高速パッケージマネージャー **uv** を使用します。
+
+**uvの特徴**:
+- Rust製の超高速パッケージインストール
+- pip/pip-tools との互換性
+- 仮想環境管理の簡素化
+- パッケージ解決の高速化
+
+**プロジェクト設定**:
+```toml
+# pyproject.toml
+[project]
+name = "realtime-api-webrtc-backend"
+version = "0.1.0"
+description = "Azure OpenAI Realtime API Proxy Server"
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "fastapi>=0.110.0,<0.120.0",
+    "uvicorn>=0.30.0,<0.40.0",
+    "aiohttp>=3.9.0,<4.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "pydantic>=2.6.0,<3.0.0"
+]
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.0.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "mypy>=1.8.0"
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+```
+
+**開発コマンド**:
+```bash
+# 依存関係インストール
+uv sync
+
+# 開発環境でサーバー起動
+uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+# テスト実行
+uv run pytest
+
+# コード品質チェック
+uv run black src/
+uv run isort src/
+uv run mypy src/
+```
+
+### 7.2 運用監視項目
 
 - **アプリケーションメトリクス**
   - セッション作成/終了数

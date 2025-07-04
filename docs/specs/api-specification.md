@@ -30,8 +30,9 @@ http://localhost:8000
 
 ### 1.4 認証方式
 - **プロキシ認証**: APIキーはバックエンドで管理（フロントエンドには露出しない）
-- **ephemeral key中継**: Azure OpenAIから取得したephemeral keyの透過的転送
-- **セキュア設計**: Azure APIキーをフロントエンドから隠蔽
+- **フロントエンドからのAPIキー**: フロントエンドから`api-key`ヘッダーを受信するが、プロキシサーバーで無視し、サーバー環境変数の`AZURE_OPENAI_API_KEY`を使用
+- **ephemeral key中継**: Azure OpenAIから取得したephemeral keyをフロントエンドに転送し、WebRTC接続で使用
+- **セキュア設計**: Azure APIキーをフロントエンドから完全隠蔽
 
 ### 1.5 レスポンス形式
 - **Content-Type**: `application/json` または `application/sdp`
@@ -64,6 +65,18 @@ api-key: dummy_key  # プロキシサーバーでは無視される
 }
 ```
 
+**リクエストヘッダー**
+- `api-key` (string, optional): フロントエンドから送信されるが、プロキシサーバーでは無視される
+- `Content-Type: application/json` (required): JSON形式のリクエストを指定
+
+**リクエストボディ**
+```json
+{
+  "model": "gpt-4o-realtime-preview",
+  "voice": "alloy"
+}
+```
+
 **リクエストフィールド説明**
 - `model` (string, required): 使用するAIモデル名
   - 利用可能値: `gpt-4o-realtime-preview`
@@ -72,15 +85,58 @@ api-key: dummy_key  # プロキシサーバーでは無視される
 
 **プロキシサーバーの処理**
 1. フロントエンドから`api-key`ヘッダーを受信するが無視
-2. サーバー環境変数`AZURE_OPENAI_API_KEY`を使用
-3. Azure OpenAI Sessions APIにリクエスト転送:
+2. サーバー環境変数`AZURE_OPENAI_API_KEY`を使用してAzure OpenAI APIにアクセス
+3. フロントエンドのリクエストボディに、Azure OpenAI Sessions APIで必要なデフォルト値を追加:
+   ```json
+   {
+     "model": "gpt-4o-realtime-preview",
+     "voice": "alloy",
+     "instructions": "あなたはとても優秀なAIアシスタントです。会話内容に対して、非常にナチュラルな返事をします。",
+     "modalities": ["text", "audio"],
+     "tools": [
+       {
+         "type": "function",
+         "name": "changeBackgroundColor",
+         "description": "Changes the background color of a web page",
+         "parameters": {
+           "type": "object",
+           "properties": {
+             "color": {"type": "string", "description": "A hex value of the color"}
+           },
+           "required": ["color"]
+         }
+       },
+       {
+         "type": "function",
+         "name": "getPageHTML",
+         "description": "Gets the HTML for the current page"
+       },
+       {
+         "type": "function",
+         "name": "changeTextColor",
+         "description": "Changes the text color of a web page",
+         "parameters": {
+           "type": "object",
+           "properties": {
+             "color": {"type": "string", "description": "A hex value of the color"}
+           },
+           "required": ["color"]
+         }
+       }
+     ]
+   }
+   ```
+4. Azure OpenAI Sessions APIにリクエスト転送:
    ```
    POST {AZURE_OPENAI_ENDPOINT}/openai/realtime/sessions?api-version={API_VERSION}
    ```
-4. Azure OpenAIからのレスポンスをそのままフロントエンドに返却
+5. Azure OpenAIからのレスポンスをそのままフロントエンドに返却
 
 **フロントエンドへのレスポンス**
-```json
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json
+
 {
   "id": "sess_001T4brAO1EhxMhTN6DbHEEW",
   "client_secret": {
@@ -144,8 +200,11 @@ a=ice-pwd:def456
 3. Azure OpenAI WebRTC APIにSDP Offerを転送:
    ```
    POST {AZURE_OPENAI_ENDPOINT}/openai/realtime?model={model}&api-version={API_VERSION}
+   Content-Type: application/sdp
+   Authorization: Bearer {ephemeral_key}
    ```
-4. SDP Answerをそのままフロントエンドに返却
+4. Azure OpenAIからSDP Answerを受信
+5. フロントエンドにSDP Answer返却
 
 **フロントエンドへのレスポンス**
 ```http
@@ -171,38 +230,6 @@ a=ice-pwd:uvw012
 - `429`: レート制限超過
 - `500`: プロキシサーバー内部エラー
 - `502`: Azure WebRTC API通信エラー
-a=rtpmap:111 opus/48000/2
-a=fmtp:111 minptime=10;useinbandfec=1
-...
-```
-
-**レスポンス（SDP Answer）**
-```
-v=0
-o=- 9876543210 9876543210 IN IP4 127.0.0.1
-s=session
-c=IN IP4 127.0.0.1
-t=0 0
-m=audio 9 UDP/TLS/RTP/SAVPF 111
-a=rtpmap:111 opus/48000/2
-a=fmtp:111 minptime=10;useinbandfec=1
-...
-```
-
-**プロキシ処理フロー**
-1. フロントエンドからSDP Offer受信
-2. ephemeral key検証
-3. Azure OpenAI WebRTC エンドポイントに転送
-4. Azure OpenAIからSDP Answer受信
-5. フロントエンドにレスポンス返却
-
-**ステータスコード**
-- `200`: SDP交換成功
-- `400`: 不正なSDP形式
-- `401`: 認証エラー（ephemeral key無効）
-- `422`: SDP処理エラー
-- `500`: Azure OpenAI APIエラー
-- `503`: プロキシサーバーエラー
 ### 2.2 データチャネルプロキシ（WebRTC）
 
 #### 2.2.1 データチャネル通信の透過的プロキシ
@@ -908,6 +935,149 @@ GET /metrics
 }
 ```
 
+### 5.3 プロキシサーバー特有のエラーハンドリング
+
+#### 5.3.1 Azure OpenAI API接続エラー
+
+```json
+{
+  "error": {
+    "code": "AZURE_SESSIONS_API_ERROR",
+    "message": "Failed to connect to Azure OpenAI Sessions API",
+    "details": {
+      "azure_status": 503,
+      "azure_error": "Service temporarily unavailable",
+      "endpoint": "/openai/realtime/sessions",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "uuid",
+      "retry_after": 30
+    }
+  }
+}
+```
+
+#### 5.3.2 WebRTC SDP処理エラー
+
+```json
+{
+  "error": {
+    "code": "SDP_PROXY_ERROR",
+    "message": "Failed to process SDP offer/answer",
+    "details": {
+      "sdp_validation_error": "Invalid SDP format: missing 'v=' line",
+      "received_content_type": "text/plain",
+      "expected_content_type": "application/sdp",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "uuid"
+    }
+  }
+}
+```
+
+#### 5.3.3 ephemeral key認証エラー
+
+```json
+{
+  "error": {
+    "code": "INVALID_EPHEMERAL_KEY",
+    "message": "Authentication failed with provided ephemeral key",
+    "details": {
+      "authorization_header": "Bearer ek_***",
+      "azure_error": "Invalid or expired ephemeral key",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "uuid",
+      "suggestion": "Please create a new session to get a valid ephemeral key"
+    }
+  }
+}
+```
+
+#### 5.3.4 リクエスト形式エラー
+
+```json
+{
+  "error": {
+    "code": "INVALID_REQUEST_FORMAT",
+    "message": "Invalid request format for proxy endpoint",
+    "details": {
+      "missing_fields": ["model", "voice"],
+      "invalid_fields": ["model: must be gpt-4o-realtime-preview"],
+      "received_content_type": "text/plain",
+      "expected_content_type": "application/json",
+      "timestamp": "2024-01-01T00:00:00Z",
+      "request_id": "uuid"
+    }
+  }
+}
+```
+
+### 5.4 プロキシエラー対応ガイド
+
+#### 5.4.1 フロントエンド側の対応
+
+**セッション作成エラー時**:
+```javascript
+// エラーハンドリング例
+async function handleSessionError(error) {
+  const errorData = await error.json();
+  
+  switch (errorData.error.code) {
+    case 'AZURE_SESSIONS_API_ERROR':
+      // Azure API接続エラー - リトライまたはユーザーに通知
+      logMessage(`Azure API Error: ${errorData.error.message}`);
+      if (errorData.error.details.retry_after) {
+        setTimeout(() => startSession(), errorData.error.details.retry_after * 1000);
+      }
+      break;
+      
+    case 'INVALID_REQUEST_FORMAT':
+      // リクエスト形式エラー - 設定確認
+      logMessage(`Request Error: ${errorData.error.details.missing_fields?.join(', ')}`);
+      break;
+      
+    default:
+      logMessage(`Unknown Error: ${errorData.error.message}`);
+  }
+}
+```
+
+**WebRTC SDP エラー時**:
+```javascript
+// SDP エラーハンドリング
+async function handleSDPError(error) {
+  const errorData = await error.json();
+  
+  if (errorData.error.code === 'SDP_PROXY_ERROR') {
+    logMessage(`SDP Error: ${errorData.error.details.sdp_validation_error}`);
+    // SDP再生成またはセッション再作成
+    await recreateSession();
+  }
+}
+```
+
+#### 5.4.2 プロキシサーバー側のログ出力
+
+**構造化ログ例**:
+```json
+{
+  "timestamp": "2024-01-01T00:00:00Z",
+  "level": "ERROR",
+  "message": "Azure OpenAI Sessions API proxy failed",
+  "context": {
+    "endpoint": "/sessions",
+    "method": "POST",
+    "azure_endpoint": "https://resource.openai.azure.com/openai/realtime/sessions",
+    "azure_status": 503,
+    "azure_error": "Service temporarily unavailable",
+    "request_id": "uuid",
+    "user_request": {
+      "model": "gpt-4o-realtime-preview",
+      "voice": "alloy"
+    },
+    "response_time_ms": 5000
+  }
+}
+```
 ## 6. API制限事項
 
 ### 6.1 レート制限
