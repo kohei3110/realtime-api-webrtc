@@ -4,17 +4,11 @@ FastAPI アプリケーション
 from fastapi import FastAPI
 import uvicorn
 import os
-from pathlib import Path
-from dotenv import load_dotenv
-
-# .envファイルの読み込み（プロジェクトルートの.envを探す）
-env_path = Path(__file__).parent.parent / ".env"
-if env_path.exists():
-    load_dotenv(env_path)
 
 from presentation.middleware.cors_middleware import setup_cors_middleware
 from presentation.api.controllers.health_controller import HealthController
 from presentation.api.controllers.sessions_proxy_controller import SessionsProxyController
+from presentation.api.controllers import audio_upload_controller
 from shared.monitoring.health import HealthCheckService, SimpleHealthCheck
 from shared.utils.logging import setup_logging, get_logger
 
@@ -60,6 +54,11 @@ def create_app() -> FastAPI:
         sessions_controller = SessionsProxyController()
         app.include_router(sessions_controller.router)
         logger.info("Sessions proxy controller registered")
+        
+        # 音声アップロードコントローラー登録
+        app.include_router(audio_upload_controller.router)
+        logger.info("Audio upload controller registered")
+        
     except Exception as e:
         logger.error(f"Failed to register proxy controllers: {e}")
         raise

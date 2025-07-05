@@ -4,9 +4,14 @@ import './App.css';
 function App() {
   const [logMessages, setLogMessages] = useState([]);
   const [sessionActive, setSessionActive] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const dataChannelRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const audioElementRef = useRef(null);
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const recordingStartTimeRef = useRef(null);
+  const sessionIdRef = useRef(null);
   
   // Log environment variables for debugging
   useEffect(() => {
@@ -20,7 +25,8 @@ function App() {
     // Validate environment variables
     const requiredVars = [
       'REACT_APP_WEBRTC_URL',
-      'REACT_APP_SESSIONS_URL', 
+      'REACT_APP_SESSIONS_URL',
+      'REACT_APP_AUDIO_UPLOAD_URL',
       'REACT_APP_API_KEY',
       'REACT_APP_DEPLOYMENT',
       'REACT_APP_VOICE'
@@ -36,6 +42,122 @@ function App() {
   // Function to log messages to UI
   const logMessage = (message) => {
     setLogMessages(prevMessages => [...prevMessages, message]);
+  };
+
+  // Start recording audio
+  const startRecording = async (stream) => {
+    try {
+      // Check if MediaRecorder is supported
+      if (!MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        logMessage("⚠️ WebM/Opus not supported, falling back to default format");
+      }
+
+      const options = {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
+          ? 'audio/webm;codecs=opus' 
+          : 'audio/webm',
+        audioBitsPerSecond: 32000
+      };
+
+      // Clone the stream for recording to avoid conflicts with WebRTC
+      const recordingStream = stream.clone();
+      mediaRecorderRef.current = new MediaRecorder(recordingStream, options);
+      recordedChunksRef.current = [];
+      recordingStartTimeRef.current = new Date().toISOString();
+
+      mediaRecorderRef.current.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorderRef.current.onstop = () => {
+        uploadRecordedAudio();
+      };
+
+      mediaRecorderRef.current.onerror = (event) => {
+        console.error('MediaRecorder error:', event.error);
+        logMessage(`❌ Recording error: ${event.error.message}`);
+        setIsRecording(false);
+      };
+
+      mediaRecorderRef.current.start(1000); // Collect data every 1 second
+      setIsRecording(true);
+      logMessage("🎤 Recording started");
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      logMessage(`❌ Failed to start recording: ${error.message}`);
+    }
+  };
+
+  // Stop recording audio
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      logMessage("🎤 Recording stopped");
+    }
+  };
+
+  // Upload recorded audio to backend
+  const uploadRecordedAudio = async () => {
+    try {
+      if (recordedChunksRef.current.length === 0) {
+        logMessage("⚠️ No audio data to upload");
+        return;
+      }
+
+      const mimeType = mediaRecorderRef.current ? mediaRecorderRef.current.mimeType : 'audio/webm';
+      const audioBlob = new Blob(recordedChunksRef.current, { type: mimeType });
+      
+      // Calculate duration approximation
+      const recordingDuration = recordingStartTimeRef.current 
+        ? (new Date() - new Date(recordingStartTimeRef.current)) / 1000 
+        : 0;
+
+      const formData = new FormData();
+      const fileName = `recording_${Date.now()}.webm`;
+      formData.append('audio_file', audioBlob, fileName);
+
+      const metadata = {
+        audio_type: 'user_speech',
+        format: 'webm',
+        duration: recordingDuration,
+        sample_rate: 48000,
+        channels: 1,
+        timestamp_start: recordingStartTimeRef.current,
+        timestamp_end: new Date().toISOString(),
+        language: 'ja-JP'
+      };
+      formData.append('metadata', JSON.stringify(metadata));
+
+      logMessage(`📤 Uploading audio (${(audioBlob.size / 1024).toFixed(1)} KB)...`);
+
+      const response = await fetch(process.env.REACT_APP_AUDIO_UPLOAD_URL, {
+        method: 'POST',
+        headers: {
+          'session-id': sessionIdRef.current || 'no-session'
+        },
+        body: formData
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        logMessage(`✅ Audio uploaded successfully`);
+        logMessage(`📁 Audio ID: ${result.audio_id}`);
+        logMessage(`🔗 Blob URL: ${result.blob_url}`);
+        if (result.sas_url) {
+          logMessage(`🔑 SAS URL expires: ${new Date(result.sas_expires_at).toLocaleString()}`);
+        }
+      } else {
+        const errorText = await response.text();
+        logMessage(`❌ Upload failed: ${response.status} ${response.statusText}`);
+        console.error('Upload error response:', errorText);
+      }
+    } catch (error) {
+      console.error('Error uploading audio:', error);
+      logMessage(`❌ Upload error: ${error.message}`);
+    }
   };
 
   // Function definitions for tool capabilities
@@ -87,6 +209,9 @@ function App() {
       const sessionId = data.id;
       const ephemeralKey = data.client_secret?.value;
       console.log("Ephemeral key:", ephemeralKey);
+
+      // Store session ID for audio upload
+      sessionIdRef.current = sessionId;
 
       // Mask the ephemeral key in the log message
       logMessage("Ephemeral Key Received: ***");
@@ -141,6 +266,9 @@ function App() {
       const audioTrack = clientMedia.getAudioTracks()[0];
       peerConnection.addTrack(audioTrack);
       logMessage("Added local audio track to peer connection");
+
+      // Start recording with the same microphone stream
+      await startRecording(clientMedia);
 
       // Set up data channel
       const dataChannel = peerConnection.createDataChannel('realtime-channel');
@@ -303,6 +431,9 @@ function App() {
 
   // Stop the session
   const stopSession = () => {
+    // Stop recording first
+    stopRecording();
+
     if (dataChannelRef.current) {
       dataChannelRef.current.close();
     }
@@ -316,11 +447,17 @@ function App() {
       audioElementRef.current.parentNode.removeChild(audioElementRef.current);
     }
     
+    // Clean up references
     peerConnectionRef.current = null;
     dataChannelRef.current = null;
     audioElementRef.current = null;
+    mediaRecorderRef.current = null;
+    recordedChunksRef.current = [];
+    recordingStartTimeRef.current = null;
+    sessionIdRef.current = null;
     
     setSessionActive(false);
+    setIsRecording(false);
     logMessage("Session closed.");
   };
 
@@ -345,7 +482,10 @@ function App() {
       {!sessionActive ? (
         <button onClick={startSession}>Start Session</button>
       ) : (
-        <button onClick={stopSession}>Close Session</button>
+        <div>
+          <button onClick={stopSession}>Close Session</button>
+          {isRecording && <span className="recording-indicator"> 🎤 Recording...</span>}
+        </div>
       )}
       
       <div className="log-container">
