@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  # バックエンドAPI
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - CORS_ORIGINS=http://localhost:3000,http://frontend:3000
+      - LOG_LEVEL=INFO
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-10-01-preview}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # フロントエンド（コメントアウト - 必要に応じて有効化）
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - REACT_APP_WEBRTC_URL=http://localhost:8000/realtime
+  #     - REACT_APP_SESSIONS_URL=http://localhost:8000/sessions
+  #     - REACT_APP_API_KEY=dummy_key
+  #     - REACT_APP_DEPLOYMENT=gpt-4o-realtime-preview
+  #     - REACT_APP_VOICE=alloy
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped

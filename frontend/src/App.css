@@ -50,3 +50,16 @@ button:hover {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+.recording-indicator {
+  color: #ff4444;
+  font-weight: bold;
+  margin-left: 10px;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
