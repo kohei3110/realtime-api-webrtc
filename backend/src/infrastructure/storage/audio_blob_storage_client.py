@@ -127,9 +127,9 @@ class AudioBlobStorageClient:
                     output_options = {
                         'vn': None,  # No video
                         'c:a': 'aac',  # AAC audio codec for MP4
-                        'b:a': '128k',  # Audio bitrate
-                        'ar': 44100,  # Sample rate
-                        'ac': 2,  # Stereo channels
+                        'b:a': '127k',  # Audio bitrate - 127 kbps as requested
+                        'ar': 32000,  # Sample rate - 32 kHz as requested
+                        'ac': 1,  # Mono channel as requested
                         'f': 'mp4',  # Force MP4 format
                         'movflags': 'frag_keyframe+empty_moov'  # Better MP4 compatibility
                     }
@@ -139,9 +139,9 @@ class AudioBlobStorageClient:
                     output_options = {
                         'vn': None,  # No video
                         'c:a': 'aac',  # AAC audio codec for MP4
-                        'b:a': '128k',  # Audio bitrate
-                        'ar': 44100,  # Sample rate
-                        'ac': 2,  # Stereo channels
+                        'b:a': '127k',  # Audio bitrate - 127 kbps as requested
+                        'ar': 32000,  # Sample rate - 32 kHz as requested
+                        'ac': 1,  # Mono channel as requested
                         'f': 'mp4'  # Force MP4 format
                     }
                 
