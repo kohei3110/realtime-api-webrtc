@@ -7,11 +7,11 @@ class AudioMetadata(BaseModel):
     """音声メタデータモデル"""
     audio_type: str = "user_speech"
     format: str = "webm"
-    duration: float
+    duration: float = 0.0
     sample_rate: int = 48000
     channels: int = 1
-    timestamp_start: str
-    timestamp_end: str
+    timestamp_start: Optional[str] = None
+    timestamp_end: Optional[str] = None
     language: str = "ja-JP"
 
 

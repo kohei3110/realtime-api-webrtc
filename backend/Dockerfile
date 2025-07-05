@@ -5,7 +5,7 @@ FROM python:3.13-slim
 WORKDIR /app
 
 # 必要なパッケージをインストール
-RUN apt-get update && apt-get install -y curl && apt-get clean
+RUN apt-get update && apt-get install -y curl ffmpeg && apt-get clean
 
 # コードをコピー
 COPY src/ src/

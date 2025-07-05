@@ -41,11 +41,20 @@ class AudioUploadService:
             metadata = self._parse_metadata(metadata_json)
             
             # Blob Storageにアップロード
-            audio_id, blob_url = self.blob_storage_client.upload_audio_file(
-                audio_data=audio_data,
-                session_id=session_id,
-                audio_format=audio_format
-            )
+            try:
+                audio_id, blob_url = self.blob_storage_client.upload_audio_file(
+                    audio_data=audio_data,
+                    session_id=session_id,
+                    audio_format=audio_format
+                )
+            except ValueError as ve:
+                # Audio file validation or conversion failed
+                logger.error(f"Audio file processing failed: {ve}")
+                raise ValueError(f"Audio file is invalid or corrupted: {ve}")
+            except Exception as e:
+                # Other upload errors
+                logger.error(f"Audio upload failed: {e}")
+                raise RuntimeError(f"Failed to upload audio file: {e}")
             
             # SAS URLを生成
             sas_url, sas_expires_at = self.blob_storage_client.generate_sas_url(
@@ -69,9 +78,12 @@ class AudioUploadService:
             logger.info(f"Successfully uploaded audio: {audio_id}")
             return response
             
-        except Exception as e:
-            logger.error(f"Error uploading audio: {e}")
+        except (ValueError, RuntimeError):
+            # Re-raise specific errors
             raise
+        except Exception as e:
+            logger.error(f"Unexpected error uploading audio: {e}")
+            raise RuntimeError(f"Audio upload service error: {e}")
     
     def _extract_format(self, filename: str) -> str:
         """ファイル名から形式を抽出"""
@@ -81,34 +93,36 @@ class AudioUploadService:
     
     def _parse_metadata(self, metadata_json: Optional[str]) -> AudioMetadata:
         """メタデータJSONを解析"""
+        current_time = datetime.utcnow().isoformat()
+        
+        # デフォルト値
+        default_metadata = {
+            "audio_type": "user_speech",
+            "format": "webm",
+            "duration": 0.0,
+            "sample_rate": 48000,
+            "channels": 1,
+            "timestamp_start": current_time,
+            "timestamp_end": current_time,
+            "language": "ja-JP"
+        }
+        
         if not metadata_json:
             # デフォルトメタデータ
-            return AudioMetadata(
-                audio_type="user_speech",
-                format="webm",
-                duration=0.0,
-                sample_rate=48000,
-                channels=1,
-                timestamp_start=datetime.utcnow().isoformat(),
-                timestamp_end=datetime.utcnow().isoformat(),
-                language="ja-JP"
-            )
+            return AudioMetadata(**default_metadata)
         
         try:
             metadata_dict = json.loads(metadata_json)
+            
+            # デフォルト値でNoneや欠落値を補完
+            for key, default_value in default_metadata.items():
+                if key not in metadata_dict or metadata_dict[key] is None:
+                    metadata_dict[key] = default_value
+            
             return AudioMetadata(**metadata_dict)
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"Invalid metadata JSON, using defaults: {e}")
-            return AudioMetadata(
-                audio_type="user_speech",
-                format="webm",
-                duration=0.0,
-                sample_rate=48000,
-                channels=1,
-                timestamp_start=datetime.utcnow().isoformat(),
-                timestamp_end=datetime.utcnow().isoformat(),
-                language="ja-JP"
-            )
+            return AudioMetadata(**default_metadata)
     
     def validate_audio_file(self, content_type: str, file_size: int) -> None:
         """音声ファイルを検証"""

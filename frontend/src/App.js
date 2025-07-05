@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 
 function App() {
@@ -44,19 +44,61 @@ function App() {
     setLogMessages(prevMessages => [...prevMessages, message]);
   };
 
+  // Test MediaRecorder capabilities
+  const testMediaRecorderSupport = () => {
+    const formats = [
+      'audio/webm;codecs=opus',
+      'audio/webm;codecs=vorbis',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/ogg;codecs=vorbis',
+      'audio/ogg',
+      'audio/mp4',
+      'audio/mpeg',
+      'audio/wav'
+    ];
+
+    logMessage("🔍 Testing MediaRecorder support:");
+    formats.forEach(format => {
+      const supported = MediaRecorder.isTypeSupported(format);
+      logMessage(`  ${format}: ${supported ? '✅' : '❌'}`);
+    });
+  };
+
   // Start recording audio
   const startRecording = async (stream) => {
     try {
-      // Check if MediaRecorder is supported
-      if (!MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
-        logMessage("⚠️ WebM/Opus not supported, falling back to default format");
+      // Check supported audio formats in order of preference
+      let mimeType;
+      let fileExtension;
+      
+      // Prioritize formats that work well with ffmpeg
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+        fileExtension = 'webm';
+        logMessage("🎵 Using WebM/Opus audio format");
+      } else if (MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')) {
+        mimeType = 'audio/ogg;codecs=opus';
+        fileExtension = 'ogg';
+        logMessage("🎵 Using OGG/Opus audio format");
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+        fileExtension = 'mp4';
+        logMessage("🎵 Using MP4 audio format");
+      } else if (MediaRecorder.isTypeSupported('audio/mpeg')) {
+        mimeType = 'audio/mpeg';
+        fileExtension = 'mp3';
+        logMessage("🎵 Using MP3 audio format");
+      } else {
+        // Fallback to basic WebM
+        mimeType = 'audio/webm';
+        fileExtension = 'webm';
+        logMessage("⚠️ Using fallback WebM format");
       }
 
       const options = {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') 
-          ? 'audio/webm;codecs=opus' 
-          : 'audio/webm',
-        audioBitsPerSecond: 32000
+        mimeType: mimeType,
+        audioBitsPerSecond: 128000 // Higher quality for better analysis
       };
 
       // Clone the stream for recording to avoid conflicts with WebRTC
@@ -64,15 +106,24 @@ function App() {
       mediaRecorderRef.current = new MediaRecorder(recordingStream, options);
       recordedChunksRef.current = [];
       recordingStartTimeRef.current = new Date().toISOString();
+      
+      // Store the file extension and mime type for later use
+      mediaRecorderRef.current.fileExtension = fileExtension;
+      mediaRecorderRef.current.actualMimeType = mimeType;
 
       mediaRecorderRef.current.ondataavailable = (event) => {
-        if (event.data.size > 0) {
+        if (event.data && event.data.size > 0) {
+          console.log(`MediaRecorder chunk received: ${event.data.size} bytes, type: ${event.data.type}`);
           recordedChunksRef.current.push(event.data);
         }
       };
 
       mediaRecorderRef.current.onstop = () => {
-        uploadRecordedAudio();
+        console.log(`Recording stopped. Total chunks: ${recordedChunksRef.current.length}`);
+        // Add a small delay to ensure all chunks are processed
+        setTimeout(() => {
+          uploadRecordedAudio();
+        }, 100);
       };
 
       mediaRecorderRef.current.onerror = (event) => {
@@ -81,9 +132,14 @@ function App() {
         setIsRecording(false);
       };
 
-      mediaRecorderRef.current.start(1000); // Collect data every 1 second
+      mediaRecorderRef.current.onstart = () => {
+        console.log('MediaRecorder started successfully');
+        logMessage(`🎤 Recording started with ${mimeType}`);
+      };
+
+      // Start recording - don't use timeslice to avoid fragmenting the file
+      mediaRecorderRef.current.start();
       setIsRecording(true);
-      logMessage("🎤 Recording started");
     } catch (error) {
       console.error('Error starting recording:', error);
       logMessage(`❌ Failed to start recording: ${error.message}`);
@@ -107,8 +163,24 @@ function App() {
         return;
       }
 
-      const mimeType = mediaRecorderRef.current ? mediaRecorderRef.current.mimeType : 'audio/webm';
-      const audioBlob = new Blob(recordedChunksRef.current, { type: mimeType });
+      // Get the actual MIME type and extension used
+      const actualMimeType = mediaRecorderRef.current ? mediaRecorderRef.current.actualMimeType : 'audio/webm';
+      const fileExtension = mediaRecorderRef.current ? mediaRecorderRef.current.fileExtension : 'webm';
+      
+      // Log chunk information for debugging
+      console.log(`Creating audio blob from ${recordedChunksRef.current.length} chunks`);
+      const totalSize = recordedChunksRef.current.reduce((total, chunk) => total + chunk.size, 0);
+      console.log(`Total audio data size: ${totalSize} bytes`);
+      
+      // Create the blob with the correct MIME type
+      const audioBlob = new Blob(recordedChunksRef.current, { type: actualMimeType });
+      console.log(`Created blob: size=${audioBlob.size}, type=${audioBlob.type}`);
+      
+      // Validate blob size
+      if (audioBlob.size === 0) {
+        logMessage("❌ Generated audio blob is empty");
+        return;
+      }
       
       // Calculate duration approximation
       const recordingDuration = recordingStartTimeRef.current 
@@ -116,22 +188,27 @@ function App() {
         : 0;
 
       const formData = new FormData();
-      const fileName = `recording_${Date.now()}.webm`;
+      const fileName = `recording_${Date.now()}.${fileExtension}`;
       formData.append('audio_file', audioBlob, fileName);
+      formData.append('session_id', sessionIdRef.current || '');
+      formData.append('audio_format', fileExtension);
 
       const metadata = {
         audio_type: 'user_speech',
-        format: 'webm',
+        format: fileExtension,
         duration: recordingDuration,
         sample_rate: 48000,
         channels: 1,
         timestamp_start: recordingStartTimeRef.current,
         timestamp_end: new Date().toISOString(),
-        language: 'ja-JP'
+        language: 'ja-JP',
+        mime_type: actualMimeType,
+        original_size: audioBlob.size
       };
       formData.append('metadata', JSON.stringify(metadata));
 
-      logMessage(`📤 Uploading audio (${(audioBlob.size / 1024).toFixed(1)} KB)...`);
+      logMessage(`📤 Uploading ${fileExtension.toUpperCase()} audio (${(audioBlob.size / 1024).toFixed(1)} KB)...`);
+      console.log('Upload metadata:', metadata);
 
       const response = await fetch(process.env.REACT_APP_AUDIO_UPLOAD_URL, {
         method: 'POST',
@@ -430,7 +507,7 @@ function App() {
   };
 
   // Stop the session
-  const stopSession = () => {
+  const stopSession = useCallback(() => {
     // Stop recording first
     stopRecording();
 
@@ -459,7 +536,7 @@ function App() {
     setSessionActive(false);
     setIsRecording(false);
     logMessage("Session closed.");
-  };
+  }, []);
 
   // Cleanup on component unmount
   useEffect(() => {
@@ -468,7 +545,7 @@ function App() {
         stopSession();
       }
     };
-  }, [sessionActive]);
+  }, [sessionActive, stopSession]);
 
   return (
     <div className="App">
@@ -480,7 +557,12 @@ function App() {
       </p>
       
       {!sessionActive ? (
-        <button onClick={startSession}>Start Session</button>
+        <div>
+          <button onClick={startSession}>Start Session</button>
+          <button onClick={testMediaRecorderSupport} style={{ marginLeft: '10px' }}>
+            Test Audio Support
+          </button>
+        </div>
       ) : (
         <div>
           <button onClick={stopSession}>Close Session</button>
