@@ -10,6 +10,7 @@
 - フロントエンドリクエストの透過的なプロキシ処理
 - セキュアなephemeral keyの中継
 - WebRTC SDP Offer/Answerの安全な転送
+- リアルタイム音声録音とBlobストレージへの保存
 
 ### 1.2 フロントエンド連携
 現在のReact フロントエンドが使用する環境変数とエンドポイント：
@@ -18,6 +19,7 @@
 // フロントエンド環境変数（.env）
 REACT_APP_WEBRTC_URL=http://localhost:8000/realtime    // WebRTC SDP プロキシ
 REACT_APP_SESSIONS_URL=http://localhost:8000/sessions  // セッション作成プロキシ
+REACT_APP_AUDIO_UPLOAD_URL=http://localhost:8000/audio/upload  // 音声アップロード
 REACT_APP_API_KEY=dummy_key                            // プロキシサーバーで無視
 REACT_APP_DEPLOYMENT=gpt-4o-realtime-preview          // AIモデル名
 REACT_APP_VOICE=alloy                                  // AI音声タイプ
@@ -264,9 +266,98 @@ Frontend ←→ Proxy Server ←→ Azure OpenAI
 
 ## 3. 音声データ管理 API
 
-### 3.1 自動保存された音声ファイル管理
+### 3.1 音声アップロード機能
 
-#### 3.1.1 セッション音声ファイル一覧
+#### 3.1.1 音声ファイルアップロード
+
+**エンドポイント**
+```
+POST /audio/upload
+```
+
+**説明**
+リアルタイム録音音声ファイルをAzure Blob Storageにアップロードします。WebRTCセッション中にフロントエンドで録音された音声を保存します。
+
+**リクエストヘッダー**
+- `Content-Type: multipart/form-data` (required)
+- `session-id` (string, optional): 関連するAzure OpenAIセッションID
+
+**リクエスト（multipart/form-data）**
+```http
+POST /audio/upload HTTP/1.1
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+session-id: sess_001T4brAO1EhxMhTN6DbHEEW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="audio_file"; filename="recording.webm"
+Content-Type: audio/webm
+
+[音声ファイルバイナリデータ]
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{
+  "audio_type": "user_speech",
+  "format": "webm",
+  "duration": 30.5,
+  "sample_rate": 48000,
+  "channels": 1,
+  "timestamp_start": "2024-01-01T00:00:00.000Z",
+  "timestamp_end": "2024-01-01T00:00:30.500Z",
+  "language": "ja-JP"
+}
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+```
+
+**フォームフィールド**
+- `audio_file` (file, required): 音声ファイル（WebM/Opus形式推奨）
+- `metadata` (JSON string, optional): 音声メタデータ
+
+**メタデータフィールド**
+- `audio_type` (string): 音声タイプ（`user_speech`, `ai_response`）
+- `format` (string): 音声フォーマット（`webm`, `opus`, `wav`）
+- `duration` (number): 再生時間（秒）
+- `sample_rate` (number): サンプルレート（Hz）
+- `channels` (number): チャンネル数
+- `timestamp_start` (string): 録音開始時刻（ISO 8601）
+- `timestamp_end` (string): 録音終了時刻（ISO 8601）
+- `language` (string): 言語コード（BCP 47）
+
+**レスポンス**
+```json
+{
+  "audio_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "session_id": "sess_001T4brAO1EhxMhTN6DbHEEW",
+  "audio_type": "user_speech",
+  "blob_url": "https://storageaccount.blob.core.windows.net/audio/recording_20240101_120000.webm",
+  "sas_url": "https://storageaccount.blob.core.windows.net/audio/recording_20240101_120000.webm?sv=2023-01-03&se=2024-01-01T13%3A00%3A00Z&sr=b&sp=r&sig=...",
+  "sas_expires_at": "2024-01-01T13:00:00Z",
+  "size_bytes": 960000,
+  "metadata": {
+    "duration": 30.5,
+    "format": "webm",
+    "sample_rate": 48000,
+    "channels": 1,
+    "timestamp_start": "2024-01-01T00:00:00.000Z",
+    "timestamp_end": "2024-01-01T00:00:30.500Z",
+    "language": "ja-JP"
+  },
+  "uploaded_at": "2024-01-01T00:00:31Z"
+}
+```
+
+**ステータスコード**
+- `201`: アップロード成功
+- `400`: リクエスト形式エラー、ファイル形式エラー
+- `413`: ファイルサイズ超過（最大: 100MB）
+- `415`: サポートされていないメディアタイプ
+- `500`: サーバー内部エラー
+- `507`: ストレージ容量不足
+
+### 3.2 自動保存された音声ファイル管理
+
+#### 3.2.1 セッション音声ファイル一覧
 
 **エンドポイント**
 ```
@@ -331,7 +422,7 @@ GET /audio/session/{session_id}
 - `404`: セッション未発見
 - `500`: サーバーエラー
 
-#### 3.1.2 音声ファイル取得
+#### 3.2.2 音声ファイル取得
 
 **エンドポイント**
 ```

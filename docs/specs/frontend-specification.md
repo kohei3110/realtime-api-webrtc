@@ -8,6 +8,7 @@ Azure OpenAI Realtime APIを利用したリアルタイム音声通信Webアプ�
 ### 1.2 主要機能
 - **リアルタイム音声通信**: WebRTCによるAzure OpenAIとの双方向音声通信
 - **AIセッション管理**: Azure OpenAI Realtime APIセッションの作成・管理
+- **音声録音・保存**: MediaRecorder APIによるリアルタイム音声録音とBlob Storage保存
 - **関数呼び出し**: AI応答による動的なWebページ操作
 - **リアルタイムログ**: セッションの詳細な状態表示とデバッグ情報
 - **環境設定管理**: 設定可能な環境変数による柔軟な接続設定
@@ -18,6 +19,8 @@ Azure OpenAI Realtime APIを利用したリアルタイム音声通信Webアプ�
 - **ビルドツール**: Create React App (react-scripts 5.0.1)
 - **WebRTC**: ブラウザネイティブのWebRTC API
 - **Audio**: Web Audio API & MediaDevices API
+- **音声録音**: MediaRecorder API（WebM/Opus形式）
+- **ファイルアップロード**: Fetch API（multipart/form-data）
 - **テスト**: React Testing Library, Jest
 
 ### 1.4 対象ブラウザ
@@ -45,11 +48,11 @@ src/
     ↓
 [React State Management] 
     ↓
-[WebRTC Session Management] 
-    ↓
-[Azure OpenAI Realtime API] 
-    ↓
-[Audio Stream & Data Channel] 
+[WebRTC Session Management] ←→ [MediaRecorder Recording]
+    ↓                              ↓
+[Azure OpenAI Realtime API]     [Audio Upload API]
+    ↓                              ↓
+[Audio Stream & Data Channel]   [Blob Storage]
     ↓
 [UI Update & Function Execution]
 ```
@@ -57,8 +60,10 @@ src/
 ### 2.3 状態管理
 - **React Hooks**: useState, useEffect, useRef
 - **セッション状態**: sessionActive (boolean)
+- **録音状態**: isRecording (boolean), recordingData (Blob)
 - **ログ管理**: logMessages (array)
 - **WebRTC参照**: peerConnectionRef, dataChannelRef, audioElementRef
+- **録音参照**: mediaRecorderRef, recordedChunksRef
 
 ## 3. 機能仕様
 
@@ -220,9 +225,107 @@ dataChannel.send(JSON.stringify(event));
 - `session.end`: セッション終了処理
 - `response.function_call_arguments.done`: 関数呼び出し実行
 
-### 3.4 関数呼び出し機能
+### 3.4 音声録音・アップロード機能
 
-#### 3.4.1 利用可能な関数
+#### 3.4.1 MediaRecorder音声録音
+**機能概要**: WebRTCセッション中の同時音声録音
+
+**録音仕様**:
+- **フォーマット**: WebM/Opus（ブラウザ標準対応）
+- **サンプルレート**: 48kHz
+- **チャンネル数**: 1（モノラル）
+- **ビットレート**: 32kbps（音声品質とファイルサイズのバランス）
+
+**実装フロー**:
+1. セッション開始時に録音開始
+2. マイクロフォンストリームの複製取得
+3. MediaRecorderによる連続録音
+4. データ取得イベントでチャンク蓄積
+5. セッション終了時に録音停止・アップロード
+
+```javascript
+// 録音開始処理
+const startRecording = async (stream) => {
+  const options = {
+    mimeType: 'audio/webm;codecs=opus',
+    audioBitsPerSecond: 32000
+  };
+  
+  mediaRecorderRef.current = new MediaRecorder(stream, options);
+  recordedChunksRef.current = [];
+  
+  mediaRecorderRef.current.ondataavailable = (event) => {
+    if (event.data.size > 0) {
+      recordedChunksRef.current.push(event.data);
+    }
+  };
+  
+  mediaRecorderRef.current.onstop = () => {
+    uploadRecordedAudio();
+  };
+  
+  mediaRecorderRef.current.start(1000); // 1秒間隔でデータ取得
+  setIsRecording(true);
+  addLogMessage("🎤 Recording started");
+};
+```
+
+#### 3.4.2 音声ファイルアップロード
+**機能概要**: 録音データのBlobストレージへのアップロード
+
+**アップロード処理**:
+```javascript
+const uploadRecordedAudio = async () => {
+  try {
+    const audioBlob = new Blob(recordedChunksRef.current, {
+      type: 'audio/webm;codecs=opus'
+    });
+    
+    const formData = new FormData();
+    formData.append('audio_file', audioBlob, `recording_${Date.now()}.webm`);
+    
+    const metadata = {
+      audio_type: 'user_speech',
+      format: 'webm',
+      duration: recordingDuration,
+      sample_rate: 48000,
+      channels: 1,
+      timestamp_start: recordingStartTime,
+      timestamp_end: new Date().toISOString(),
+      language: 'ja-JP'
+    };
+    formData.append('metadata', JSON.stringify(metadata));
+    
+    const response = await fetch(process.env.REACT_APP_AUDIO_UPLOAD_URL, {
+      method: 'POST',
+      headers: {
+        'session-id': sessionId
+      },
+      body: formData
+    });
+    
+    if (response.ok) {
+      const result = await response.json();
+      addLogMessage(`✅ Audio uploaded: ${result.audio_id}`);
+      addLogMessage(`📁 Blob URL: ${result.blob_url}`);
+    } else {
+      addLogMessage(`❌ Upload failed: ${response.status}`);
+    }
+  } catch (error) {
+    addLogMessage(`❌ Upload error: ${error.message}`);
+  }
+};
+```
+
+**エラーハンドリング**:
+- ネットワークエラー時の再試行
+- ファイルサイズ制限チェック
+- フォーマット対応チェック
+- アップロード進捗表示
+
+### 3.5 関数呼び出し機能
+
+#### 3.5.1 利用可能な関数
 **機能一覧**:
 
 1. **getPageHTML**
@@ -239,7 +342,7 @@ dataChannel.send(JSON.stringify(event));
    - パラメータ: `{ color: string }` (16進カラーコード)
    - 戻り値: `{ success: true, color: string }`
 
-#### 3.4.2 関数実行フロー
+#### 3.5.2 関数実行フロー
 **処理手順**:
 1. AI応答による関数呼び出し指示受信
 2. 関数名と引数の解析
@@ -266,9 +369,9 @@ if (realtimeEvent.type === "response.function_call_arguments.done") {
 }
 ```
 
-### 3.5 ログ・デバッグ機能
+### 3.6 ログ・デバッグ機能
 
-#### 3.5.1 リアルタイムログ表示
+#### 3.6.1 リアルタイムログ表示
 **機能概要**: セッションの状態とイベントのリアルタイム表示
 
 **ログレベル**:
@@ -291,7 +394,8 @@ if (realtimeEvent.type === "response.function_call_arguments.done") {
 ```javascript
 const requiredVars = [
   'REACT_APP_WEBRTC_URL',
-  'REACT_APP_SESSIONS_URL', 
+  'REACT_APP_SESSIONS_URL',
+  'REACT_APP_AUDIO_UPLOAD_URL',
   'REACT_APP_API_KEY',
   'REACT_APP_DEPLOYMENT',
   'REACT_APP_VOICE'
@@ -398,6 +502,9 @@ REACT_APP_WEBRTC_URL=https://region.realtimeapi-preview.ai.azure.com/v1/realtime
 
 # Sessions API エンドポイント URL
 REACT_APP_SESSIONS_URL=https://your-resource-name.openai.azure.com/openai/realtimeapi/sessions?api-version=2025-04-01-preview
+
+# 音声アップロード エンドポイント URL
+REACT_APP_AUDIO_UPLOAD_URL=http://localhost:8000/audio/upload
 
 # Azure OpenAI API キー
 REACT_APP_API_KEY=your-api-key-here

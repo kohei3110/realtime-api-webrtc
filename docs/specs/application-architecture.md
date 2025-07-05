@@ -14,6 +14,7 @@
 ### 1.2 プロキシサーバーの主要責任
 - **APIキー管理**: Azure OpenAI APIキーをサーバーサイドで安全に管理
 - **透過的プロキシ**: フロントエンドリクエストのAzure OpenAI APIへの透明な転送
+- **音声ファイル管理**: 録音音声のBlobストレージ保存とメタデータ管理
 - **セキュリティ**: フロントエンドからのAPIキー隠蔽とセキュア通信
 - **エラーハンドリング**: Azure API エラーの適切な処理とレスポンス変換
 - **ログ・監視**: プロキシ通信の記録とシステム監視
@@ -25,6 +26,7 @@
 // フロントエンドの環境変数設定
 REACT_APP_SESSIONS_URL=http://localhost:8000/sessions    // セッション作成プロキシ
 REACT_APP_WEBRTC_URL=http://localhost:8000/realtime      // WebRTC SDP プロキシ
+REACT_APP_AUDIO_UPLOAD_URL=http://localhost:8000/audio/upload  // 音声アップロード
 REACT_APP_API_KEY=dummy_key                              // プロキシサーバーで無視
 REACT_APP_DEPLOYMENT=gpt-4o-realtime-preview            // AIモデル名
 REACT_APP_VOICE=alloy                                    // AI音声タイプ
@@ -55,16 +57,18 @@ src/
 │   └── dto/             # データ転送オブジェクト
 ├── domain/               # ドメイン層
 │   ├── entities/         # エンティティ（セッション、プロキシログなど）
+│   ├── models/          # ドメインモデル（音声メタデータなど）
 │   ├── value_objects/    # 値オブジェクト
 │   ├── services/         # ドメインサービス
 │   └── exceptions/       # ドメイン例外
 ├── infrastructure/       # インフラストラクチャ層
-│   ├── http/            # HTTPクライアント実装
-│   ├── azure/           # Azure OpenAI API クライアント
+│   ├── azure/           # Azure SDK実装（OpenAI, Blob Storage）
+│   ├── storage/         # ストレージクライアント実装
 │   ├── configuration/   # 設定管理
 │   └── logging/         # ログ実装
 ├── presentation/         # プレゼンテーション層
 │   ├── api/             # プロキシ API エンドポイント
+│   │   └── controllers/ # コントローラー（sessions, audio, health）
 │   ├── middleware/      # プロキシミドルウェア
 │   └── dto/             # API データ転送オブジェクト
 └── shared/              # 共通コンポーネント
@@ -78,6 +82,7 @@ src/
 #### 2.2.1 責任
 - HTTPリクエスト/レスポンス処理
 - Azure OpenAI APIへのプロキシ処理
+- 音声ファイルアップロード・Blobストレージ連携
 - リクエスト検証・DTOマッピング
 - セキュリティ（APIキー隠蔽）
 - エラーハンドリング
@@ -1504,3 +1509,177 @@ uv run mypy src/
   - 依存関係自動更新
 
 この設計により、SOLID原則に従った保守性・拡張性の高いアプリケーションアーキテクチャを実現できます。
+
+## 6. 音声録音・ストレージ統合仕様
+
+### 6.1 音声録音・アップロード機能概要
+WebRTCセッション開始時に並行して音声録音を実行し、セッション終了時に自動的にAzure Blob Storageにアップロードする機能です。
+
+### 6.2 実装シーケンス図
+```mermaid
+sequenceDiagram
+    participant F as Frontend
+    participant B as Backend
+    participant S as Blob Storage
+    participant A as Azure OpenAI
+    
+    Note over F: "Start Session"ボタン押下
+    
+    F->>F: MediaRecorder録音開始
+    F->>B: POST /sessions
+    B->>A: セッション作成リクエスト
+    A-->>B: ephemeral key返却
+    B-->>F: ephemeral key返却
+    
+    F->>F: WebRTC接続初期化
+    F->>A: WebRTC音声送信開始
+    
+    Note over F: ユーザーとAIの音声会話
+    F<<->>A: 双方向音声通信
+    F->>F: 同時音声録音（MediaRecorder）
+    
+    Note over F: "Close Session"ボタン押下
+    F->>F: 録音停止・Blobデータ作成
+    F->>B: POST /audio/upload（multipart/form-data）
+    B->>S: 音声ファイル保存
+    S-->>B: Blob URL + SAS URL返却
+    B-->>F: アップロード結果返却
+    
+    F->>F: WebRTC接続終了
+    F->>F: セッション状態リセット
+```
+
+### 6.3 技術仕様詳細
+
+#### 6.3.1 フロントエンド実装
+**MediaRecorder設定**:
+```javascript
+const audioOptions = {
+  mimeType: 'audio/webm;codecs=opus',
+  audioBitsPerSecond: 32000
+};
+
+const startRecording = async (microphoneStream) => {
+  // マイクロフォンストリームを複製（WebRTCと録音で共有）
+  const recordingStream = microphoneStream.clone();
+  
+  mediaRecorderRef.current = new MediaRecorder(recordingStream, audioOptions);
+  recordedChunksRef.current = [];
+  
+  mediaRecorderRef.current.ondataavailable = (event) => {
+    recordedChunksRef.current.push(event.data);
+  };
+  
+  mediaRecorderRef.current.start(1000); // 1秒間隔
+  setIsRecording(true);
+};
+```
+
+**アップロード実装**:
+```javascript
+const uploadRecordedAudio = async () => {
+  const audioBlob = new Blob(recordedChunksRef.current, {
+    type: 'audio/webm;codecs=opus'
+  });
+  
+  const formData = new FormData();
+  formData.append('audio_file', audioBlob, `session_${sessionId}_${Date.now()}.webm`);
+  formData.append('metadata', JSON.stringify({
+    audio_type: 'user_speech',
+    format: 'webm',
+    duration: recordingDuration,
+    sample_rate: 48000,
+    channels: 1,
+    timestamp_start: recordingStartTime,
+    timestamp_end: new Date().toISOString(),
+    language: 'ja-JP'
+  }));
+  
+  const response = await fetch(process.env.REACT_APP_AUDIO_UPLOAD_URL, {
+    method: 'POST',
+    headers: {
+      'session-id': sessionId
+    },
+    body: formData
+  });
+  
+  return await response.json();
+};
+```
+
+#### 6.3.2 バックエンド実装
+**音声アップロードコントローラー**:
+```python
+from fastapi import APIRouter, UploadFile, Form, Header
+from azure.storage.blob import BlobServiceClient
+import uuid
+
+class AudioUploadController:
+    def __init__(self, blob_service_client: BlobServiceClient):
+        self.blob_service_client = blob_service_client
+        self.router = APIRouter(prefix="/audio", tags=["audio"])
+        
+    async def upload_audio(
+        self,
+        audio_file: UploadFile,
+        metadata: str = Form(...),
+        session_id: str = Header(None, alias="session-id")
+    ):
+        # ファイル検証
+        await self._validate_audio_file(audio_file)
+        
+        # メタデータ解析
+        audio_metadata = json.loads(metadata)
+        
+        # Blob Storage アップロード
+        audio_id = str(uuid.uuid4())
+        blob_name = f"audio/{session_id}/{audio_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.webm"
+        
+        blob_client = self.blob_service_client.get_blob_client(
+            container="audio",
+            blob=blob_name
+        )
+        
+        # ファイルアップロード
+        await blob_client.upload_blob(
+            await audio_file.read(),
+            overwrite=True,
+            metadata=audio_metadata
+        )
+        
+        # SAS URL生成（1時間有効）
+        sas_url = self._generate_sas_url(blob_name, hours=1)
+        
+        return {
+            "audio_id": audio_id,
+            "session_id": session_id,
+            "blob_url": blob_client.url,
+            "sas_url": sas_url,
+            "size_bytes": audio_file.size,
+            "metadata": audio_metadata,
+            "uploaded_at": datetime.utcnow().isoformat()
+        }
+```
+
+### 6.4 エラーハンドリング・運用考慮
+
+#### 6.4.1 アップロード失敗時の処理
+- **ネットワークエラー**: 自動再試行（最大3回）
+- **ファイルサイズ超過**: ユーザーへの明確なエラーメッセージ
+- **ストレージ容量不足**: 管理者アラート + 代替ストレージ検討
+
+#### 6.4.2 録音品質の最適化
+- **ビットレート調整**: 音声品質とファイルサイズのバランス
+- **フォーマット選択**: ブラウザ対応状況に応じた動的選択
+- **無音検出**: 無音部分の自動カット機能（将来拡張）
+
+#### 6.4.3 セキュリティ考慮事項
+- **SAS URL有効期限**: 短期間設定（デフォルト1時間）
+- **ファイルアクセス制御**: セッション単位でのアクセス分離
+- **メタデータ暗号化**: 機密性の高いメタデータの保護
+
+### 6.5 将来拡張可能性
+- **音声転写機能**: Azure Speech-to-Textとの統合
+- **音声分析**: 感情分析・音声品質評価
+- **自動要約**: 会話内容の自動要約生成
+- **マルチセッション対応**: 複数セッションの統合管理

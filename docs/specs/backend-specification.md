@@ -21,6 +21,7 @@
 // フロントエンドの環境変数
 REACT_APP_WEBRTC_URL=http://localhost:8000/realtime    // WebRTC SDP プロキシエンドポイント
 REACT_APP_SESSIONS_URL=http://localhost:8000/sessions  // セッション作成プロキシエンドポイント
+REACT_APP_AUDIO_UPLOAD_URL=http://localhost:8000/audio/upload  // 音声アップロードエンドポイント
 REACT_APP_API_KEY=dummy_key                            // プロキシサーバーでは使用しない（隠蔽対象）
 REACT_APP_DEPLOYMENT=gpt-4o-realtime-preview          // AIモデル名
 REACT_APP_VOICE=alloy                                  // AI音声タイプ
@@ -31,6 +32,7 @@ REACT_APP_VOICE=alloy                                  // AI音声タイプ
 - **APIキー隠蔽**: Azure OpenAI APIキーをサーバーサイドで管理
 - **ephemeral key中継**: セッション作成時のephemeral keyを安全に転送
 - **SDP プロキシ**: WebRTC SDP Offer/Answerの透過的な中継処理
+- **音声ファイル管理**: MediaRecorderで録音された音声ファイルのBlobストレージ保存
 - **エラーハンドリング**: Azure APIエラーの適切な処理とレスポンス変換
 - **CORS対応**: フロントエンドからのクロスオリジンリクエスト対応
 
@@ -38,7 +40,8 @@ REACT_APP_VOICE=alloy                                  // AI音声タイプ
 - **ランタイム**: Python 3.13+
 - **フレームワーク**: FastAPI
 - **HTTPクライアント**: httpx (非同期HTTP通信)
-- **Azure SDK**: azure-openai-client (推奨)
+- **Azure SDK**: azure-openai-client, azure-storage-blob
+- **ファイル処理**: multipart/form-data handling
 - **コンテナ**: Docker
 - **非同期処理**: asyncio
 - **パッケージ管理**: uv または pip
@@ -100,10 +103,19 @@ AZURE_OPENAI_API_KEY=sk-xxx...                    # Azure OpenAI APIキー（重
 AZURE_OPENAI_ENDPOINT=https://xxx.openai.azure.com # Azure OpenAIエンドポイント
 AZURE_OPENAI_API_VERSION=2024-10-01-preview       # APIバージョン
 
+# Azure Blob Storage 設定
+AZURE_STORAGE_ACCOUNT_NAME=yourstorageaccount     # Blob Storageアカウント名
+AZURE_STORAGE_ACCOUNT_KEY=xxxxx...                # Blob Storageアクセスキー
+AZURE_STORAGE_CONTAINER_NAME=audio                # 音声ファイル用コンテナ名
+
 # サーバー設定
 HOST=0.0.0.0                                      # サーバーホスト
 PORT=8000                                          # サーバーポート
 CORS_ORIGINS=http://localhost:3000                 # フロントエンドのオリジン
+
+# 音声ファイル設定
+MAX_AUDIO_FILE_SIZE_MB=100                         # 最大音声ファイルサイズ（MB）
+SUPPORTED_AUDIO_FORMATS=webm,opus,wav             # サポート音声フォーマット
 
 # ログレベル
 LOG_LEVEL=INFO
@@ -246,9 +258,113 @@ Content-Type: application/sdp
 Body: SDP Answer (text/plain)
 ```
 
-### 3.3 ヘルスチェック
+### 3.3 音声ファイル管理 API
 
-#### 3.3.1 GET /health
+#### 3.3.1 POST /audio/upload
+フロントエンドから録音された音声ファイルをAzure Blob Storageにアップロードします。
+
+**エンドポイント**: `POST /audio/upload`
+
+**フロントエンドからのリクエスト**:
+```http
+POST /audio/upload HTTP/1.1
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+session-id: sess_001T4brAO1EhxMhTN6DbHEEW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="audio_file"; filename="recording.webm"
+Content-Type: audio/webm
+
+[音声ファイルバイナリデータ]
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{
+  "audio_type": "user_speech",
+  "format": "webm",
+  "duration": 30.5,
+  "sample_rate": 48000,
+  "channels": 1,
+  "timestamp_start": "2024-01-01T00:00:00.000Z",
+  "timestamp_end": "2024-01-01T00:00:30.500Z",
+  "language": "ja-JP"
+}
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+```
+
+**プロキシサーバーの処理フロー**:
+1. multipart/form-dataリクエストの解析
+2. 音声ファイルとメタデータの検証
+3. ファイルサイズ・フォーマットのバリデーション
+4. Azure Blob Storageへのファイルアップロード
+5. SAS URL生成（1時間有効）
+6. 音声メタデータの記録
+7. アップロード結果のレスポンス
+
+**バリデーション処理**:
+```python
+# ファイルサイズチェック
+max_size = int(os.getenv('MAX_AUDIO_FILE_SIZE_MB', 100)) * 1024 * 1024
+if file_size > max_size:
+    raise HTTPException(status_code=413, detail="File size exceeds limit")
+
+# フォーマットチェック
+supported_formats = os.getenv('SUPPORTED_AUDIO_FORMATS', 'webm,opus,wav').split(',')
+if file_format not in supported_formats:
+    raise HTTPException(status_code=415, detail="Unsupported audio format")
+```
+
+**Blob Storage操作**:
+```python
+# Blobファイル名生成
+blob_name = f"audio/{session_id}/{audio_id}_{timestamp}.{format}"
+
+# ファイルアップロード
+blob_client = blob_service_client.get_blob_client(
+    container=container_name, 
+    blob=blob_name
+)
+blob_client.upload_blob(audio_file_data, overwrite=True)
+
+# SAS URL生成
+sas_url = generate_blob_sas_url(blob_name, expire_hours=1)
+```
+
+**レスポンス**:
+```json
+{
+  "audio_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "session_id": "sess_001T4brAO1EhxMhTN6DbHEEW",
+  "audio_type": "user_speech",
+  "blob_url": "https://storage.blob.core.windows.net/audio/recording_20240101_120000.webm",
+  "sas_url": "https://storage.blob.core.windows.net/audio/recording_20240101_120000.webm?sv=2023-01-03&se=2024-01-01T13%3A00%3A00Z&sr=b&sp=r&sig=...",
+  "sas_expires_at": "2024-01-01T13:00:00Z",
+  "size_bytes": 960000,
+  "metadata": {
+    "duration": 30.5,
+    "format": "webm",
+    "sample_rate": 48000,
+    "channels": 1,
+    "timestamp_start": "2024-01-01T00:00:00.000Z",
+    "timestamp_end": "2024-01-01T00:00:30.500Z",
+    "language": "ja-JP"
+  },
+  "uploaded_at": "2024-01-01T00:00:31Z"
+}
+```
+
+**ステータスコード**:
+- `201`: アップロード成功
+- `400`: リクエスト形式エラー、メタデータエラー
+- `413`: ファイルサイズ超過
+- `415`: サポートされていない音声フォーマット
+- `500`: サーバー内部エラー
+- `507`: ストレージ容量不足
+
+### 3.4 ヘルスチェック
+
+#### 3.4.1 GET /health
 プロキシサーバーの状態を確認します。
 
 **レスポンス**:
@@ -260,7 +376,7 @@ Body: SDP Answer (text/plain)
 }
 ```
 
-#### 3.3.2 セッション終了
+#### 3.4.2 セッション終了
 **DELETE** `/sessions/{session_id}`
 ```json
 {
@@ -276,7 +392,7 @@ Body: SDP Answer (text/plain)
 }
 ```
 
-#### 3.3.3 セッション一覧取得
+#### 3.4.3 セッション一覧取得
 **GET** `/sessions`
 ```json
 {
