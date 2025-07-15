@@ -387,13 +387,6 @@ function App() {
           logMessage("🎤 ユーザーが話し始めました");
         } else if (realtimeEvent.type === "input_audio_buffer.speech_stopped") {
           logMessage("🎤 ユーザーが話し終わりました");
-        } else if (realtimeEvent.type === "input_audio_buffer.committed") {
-          // ユーザーの音声入力を会話履歴に追加（音声のみの場合）
-          setConversationHistory(prev => [...prev, {
-            role: 'user',
-            content: '[音声入力]',
-            timestamp: new Date().toLocaleTimeString()
-          }]);
         } else if (realtimeEvent.type === "response.function_call_arguments.done") {
           const fn = fns[realtimeEvent.name];
           if (fn !== undefined) {
