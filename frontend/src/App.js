@@ -7,6 +7,7 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [currentTranscript, setCurrentTranscript] = useState('');
   const [conversationHistory, setConversationHistory] = useState([]);
+  const [responseTimings, setResponseTimings] = useState([]);
   const dataChannelRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const audioElementRef = useRef(null);
@@ -14,6 +15,7 @@ function App() {
   const recordedChunksRef = useRef([]);
   const recordingStartTimeRef = useRef(null);
   const sessionIdRef = useRef(null);
+  const avatarSpeechEndTimeRef = useRef(null);
   
   // Log environment variables for debugging
   useEffect(() => {
@@ -383,8 +385,36 @@ function App() {
             timestamp: new Date().toLocaleTimeString()
           }]);
           setCurrentTranscript(''); // リセット
+        } else if (realtimeEvent.type === "response.audio.done") {
+          // アバターの音声出力完了時刻を記録
+          avatarSpeechEndTimeRef.current = Date.now();
+          logMessage("🤖 アバターの発話が完了しました");
+          console.log("Avatar speech ended at:", new Date(avatarSpeechEndTimeRef.current).toISOString());
         } else if (realtimeEvent.type === "input_audio_buffer.speech_started") {
           logMessage("🎤 ユーザーが話し始めました");
+          
+          // アバター発話完了からユーザー発話開始までの時間を計測
+          if (avatarSpeechEndTimeRef.current) {
+            const userSpeechStartTime = Date.now();
+            const responseTime = userSpeechStartTime - avatarSpeechEndTimeRef.current;
+            
+            const timingData = {
+              avatarEndTime: avatarSpeechEndTimeRef.current,
+              userStartTime: userSpeechStartTime,
+              responseTimeMs: responseTime,
+              responseTimeSec: (responseTime / 1000).toFixed(2),
+              timestamp: new Date().toLocaleTimeString()
+            };
+            
+            // 応答時間を状態に保存
+            setResponseTimings(prev => [...prev, timingData]);
+            
+            logMessage(`⏱️ 応答時間: ${timingData.responseTimeSec}秒`);
+            console.log("Response timing data:", timingData);
+            
+            // アバター発話完了時刻をリセット
+            avatarSpeechEndTimeRef.current = null;
+          }
         } else if (realtimeEvent.type === "input_audio_buffer.speech_stopped") {
           logMessage("🎤 ユーザーが話し終わりました");
         } else if (realtimeEvent.type === "response.function_call_arguments.done") {
@@ -550,11 +580,13 @@ function App() {
     recordedChunksRef.current = [];
     recordingStartTimeRef.current = null;
     sessionIdRef.current = null;
+    avatarSpeechEndTimeRef.current = null;
     
     setSessionActive(false);
     setIsRecording(false);
     setCurrentTranscript('');
     setConversationHistory([]);
+    setResponseTimings([]);
     logMessage("Session closed.");
   }, []);
 
@@ -587,6 +619,60 @@ function App() {
         <div>
           <button onClick={stopSession}>Close Session</button>
           {isRecording && <span className="recording-indicator"> 🎤 Recording...</span>}
+        </div>
+      )}
+      
+      {/* 応答時間統計 */}
+      {sessionActive && responseTimings.length > 0 && (
+        <div className="response-stats">
+          <h3>応答時間統計</h3>
+          <div style={{ 
+            backgroundColor: '#f5f5f5', 
+            padding: '10px', 
+            borderRadius: '8px',
+            marginBottom: '20px'
+          }}>
+            <div>
+              <strong>平均応答時間:</strong> {
+                (responseTimings.reduce((sum, timing) => sum + timing.responseTimeMs, 0) / responseTimings.length / 1000).toFixed(2)
+              }秒
+            </div>
+            <div>
+              <strong>最短応答時間:</strong> {
+                (Math.min(...responseTimings.map(timing => timing.responseTimeMs)) / 1000).toFixed(2)
+              }秒
+            </div>
+            <div>
+              <strong>最長応答時間:</strong> {
+                (Math.max(...responseTimings.map(timing => timing.responseTimeMs)) / 1000).toFixed(2)
+              }秒
+            </div>
+            <div>
+              <strong>応答回数:</strong> {responseTimings.length}回
+            </div>
+          </div>
+          
+          <h4>詳細履歴</h4>
+          <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+            {responseTimings.map((timing, index) => (
+              <div 
+                key={index}
+                style={{
+                  padding: '5px 10px',
+                  margin: '2px 0',
+                  backgroundColor: timing.responseTimeMs < 2000 ? '#e8f5e8' : 
+                                    timing.responseTimeMs < 5000 ? '#fff3cd' : '#f8d7da',
+                  borderRadius: '4px',
+                  fontSize: '0.9em'
+                }}
+              >
+                <span style={{ fontWeight: 'bold' }}>{timing.timestamp}</span>: 
+                {timing.responseTimeSec}秒
+                {timing.responseTimeMs < 2000 && ' 🚀'}
+                {timing.responseTimeMs >= 5000 && ' 🐌'}
+              </div>
+            ))}
+          </div>
         </div>
       )}
       
