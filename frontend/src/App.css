@@ -39,9 +39,10 @@ button:hover {
   border: 1px solid #ddd;
   border-radius: 5px;
   padding: 10px;
-  height: 400px;
+  height: 300px;
   overflow-y: auto;
   text-align: left;
+  margin-top: 20px;
 }
 
 .log-container p {
@@ -62,4 +63,66 @@ button:hover {
   0% { opacity: 1; }
   50% { opacity: 0.5; }
   100% { opacity: 1; }
+}
+
+/* 会話コンテナのスタイル */
+.conversation-container {
+  margin: 20px 0;
+  max-width: 800px;
+}
+
+.conversation-container h3 {
+  color: #0078d4;
+  margin-bottom: 15px;
+  font-size: 1.2em;
+}
+
+.conversation-history {
+  background-color: #ffffff;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 15px;
+  max-height: 400px;
+  overflow-y: auto;
+  margin-bottom: 20px;
+}
+
+.message {
+  margin: 10px 0;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.message.user {
+  background-color: #f3e5f5;
+  border-left: 4px solid #9c27b0;
+}
+
+.message.assistant {
+  background-color: #e3f2fd;
+  border-left: 4px solid #2196f3;
+}
+
+.message.current {
+  background-color: #e8f5e8 !important;
+  border: 2px dashed #4caf50;
+  animation: fadeIn 0.3s ease-in;
+}
+
+.typing-indicator {
+  animation: blink 1s infinite;
+  font-weight: bold;
+  color: #4caf50;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }

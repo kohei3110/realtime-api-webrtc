@@ -5,6 +5,8 @@ function App() {
   const [logMessages, setLogMessages] = useState([]);
   const [sessionActive, setSessionActive] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [currentTranscript, setCurrentTranscript] = useState('');
+  const [conversationHistory, setConversationHistory] = useState([]);
   const dataChannelRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const audioElementRef = useRef(null);
@@ -369,6 +371,29 @@ function App() {
         } else if (realtimeEvent.type === "session.end") {
           logMessage("Session ended.");
           setSessionActive(false);
+        } else if (realtimeEvent.type === "response.audio_transcript.delta") {
+          // リアルタイムでテキストを追加
+          setCurrentTranscript(prev => prev + realtimeEvent.delta);
+        } else if (realtimeEvent.type === "response.audio_transcript.done") {
+          // 完成したテキストを会話履歴に追加
+          const completeTranscript = realtimeEvent.transcript;
+          setConversationHistory(prev => [...prev, {
+            role: 'assistant',
+            content: completeTranscript,
+            timestamp: new Date().toLocaleTimeString()
+          }]);
+          setCurrentTranscript(''); // リセット
+        } else if (realtimeEvent.type === "input_audio_buffer.speech_started") {
+          logMessage("🎤 ユーザーが話し始めました");
+        } else if (realtimeEvent.type === "input_audio_buffer.speech_stopped") {
+          logMessage("🎤 ユーザーが話し終わりました");
+        } else if (realtimeEvent.type === "input_audio_buffer.committed") {
+          // ユーザーの音声入力を会話履歴に追加（音声のみの場合）
+          setConversationHistory(prev => [...prev, {
+            role: 'user',
+            content: '[音声入力]',
+            timestamp: new Date().toLocaleTimeString()
+          }]);
         } else if (realtimeEvent.type === "response.function_call_arguments.done") {
           const fn = fns[realtimeEvent.name];
           if (fn !== undefined) {
@@ -468,7 +493,7 @@ function App() {
     const event = {
       type: "session.update",
       session: {
-        instructions: "あなたはとても優秀なAIアシスタントです。会話内容に対して、非常にナチュラルな返事をします。",
+        instructions: "あなたは高齢者向けの親しみやすい会話パートナーです。 以下の特徴を持って会話してください： - 話し方：丁寧で親しみやすく、ゆっくりとした口調 - 性格：優しく、聞き上手で、励ましが上手 - 知識：昭和の文化や歴史に詳しく、懐かしい話題を提供 - 目的：楽しい会話を通じて認知機能を刺激し、心の支えとなる",
         modalities: ['text', 'audio'],
         tools: [
           {
@@ -535,6 +560,8 @@ function App() {
     
     setSessionActive(false);
     setIsRecording(false);
+    setCurrentTranscript('');
+    setConversationHistory([]);
     logMessage("Session closed.");
   }, []);
 
@@ -567,6 +594,56 @@ function App() {
         <div>
           <button onClick={stopSession}>Close Session</button>
           {isRecording && <span className="recording-indicator"> 🎤 Recording...</span>}
+        </div>
+      )}
+      
+      {/* 会話履歴とリアルタイムテキスト表示 */}
+      {sessionActive && (
+        <div className="conversation-container">
+          <h3>会話履歴</h3>
+          <div className="conversation-history">
+            {conversationHistory.map((message, index) => (
+              <div 
+                key={index} 
+                className={`message ${message.role}`}
+                style={{
+                  margin: '10px 0',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  backgroundColor: message.role === 'assistant' ? '#e3f2fd' : '#f3e5f5'
+                }}
+              >
+                <div style={{ fontWeight: 'bold', fontSize: '0.9em', color: '#666' }}>
+                  {message.role === 'assistant' ? 'AI' : 'ユーザー'} - {message.timestamp}
+                </div>
+                <div style={{ marginTop: '5px' }}>
+                  {message.content}
+                </div>
+              </div>
+            ))}
+            
+            {/* リアルタイムテキスト表示 */}
+            {currentTranscript && (
+              <div 
+                className="message assistant current"
+                style={{
+                  margin: '10px 0',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  backgroundColor: '#e8f5e8',
+                  border: '2px dashed #4caf50'
+                }}
+              >
+                <div style={{ fontWeight: 'bold', fontSize: '0.9em', color: '#666' }}>
+                  AI (入力中...)
+                </div>
+                <div style={{ marginTop: '5px' }}>
+                  {currentTranscript}
+                  <span className="typing-indicator">|</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
       
