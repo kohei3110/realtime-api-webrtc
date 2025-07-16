@@ -5,6 +5,9 @@ function App() {
   const [logMessages, setLogMessages] = useState([]);
   const [sessionActive, setSessionActive] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
+  const [currentTranscript, setCurrentTranscript] = useState('');
+  const [conversationHistory, setConversationHistory] = useState([]);
+  const [responseTimings, setResponseTimings] = useState([]);
   const dataChannelRef = useRef(null);
   const peerConnectionRef = useRef(null);
   const audioElementRef = useRef(null);
@@ -12,6 +15,7 @@ function App() {
   const recordedChunksRef = useRef([]);
   const recordingStartTimeRef = useRef(null);
   const sessionIdRef = useRef(null);
+  const aiSpeechEndTimeRef = useRef(null);
   
   // Log environment variables for debugging
   useEffect(() => {
@@ -369,6 +373,50 @@ function App() {
         } else if (realtimeEvent.type === "session.end") {
           logMessage("Session ended.");
           setSessionActive(false);
+        } else if (realtimeEvent.type === "response.audio_transcript.delta") {
+          // リアルタイムでテキストを追加
+          setCurrentTranscript(prev => prev + realtimeEvent.delta);
+        } else if (realtimeEvent.type === "response.audio_transcript.done") {
+          // 完成したテキストを会話履歴に追加
+          const completeTranscript = realtimeEvent.transcript;
+          setConversationHistory(prev => [...prev, {
+            role: 'assistant',
+            content: completeTranscript,
+            timestamp: new Date().toLocaleTimeString()
+          }]);
+          setCurrentTranscript(''); // リセット
+        } else if (realtimeEvent.type === "output_audio_buffer.stopped") {
+          // AIの音声出力停止時刻を記録（実際に話し終わったタイミング）
+          aiSpeechEndTimeRef.current = Date.now();
+          logMessage("🤖 AIの発話が停止しました");
+          console.log("AI speech stopped at:", new Date(aiSpeechEndTimeRef.current).toISOString());
+        } else if (realtimeEvent.type === "input_audio_buffer.speech_started") {
+          logMessage("🎤 ユーザーが話し始めました");
+          
+          // AI発話完了からユーザー発話開始までの時間を計測（ターンアラウンドタイム）
+          if (aiSpeechEndTimeRef.current) {
+            const userSpeechStartTime = Date.now();
+            const turnAroundTime = userSpeechStartTime - aiSpeechEndTimeRef.current;
+            
+            const timingData = {
+              aiSpeechEndTime: aiSpeechEndTimeRef.current,
+              userSpeechStartTime: userSpeechStartTime,
+              turnAroundTimeMs: turnAroundTime,
+              turnAroundTimeSec: (turnAroundTime / 1000).toFixed(2),
+              timestamp: new Date().toLocaleTimeString()
+            };
+            
+            // ターンアラウンドタイムを状態に保存
+            setResponseTimings(prev => [...prev, timingData]);
+            
+            logMessage(`⏱️ ターンアラウンドタイム: ${timingData.turnAroundTimeSec}秒`);
+            console.log("Turn-around timing data:", timingData);
+            
+            // AI発話完了時刻をリセット
+            aiSpeechEndTimeRef.current = null;
+          }
+        } else if (realtimeEvent.type === "input_audio_buffer.speech_stopped") {
+          logMessage("🎤 ユーザーが話し終わりました");
         } else if (realtimeEvent.type === "response.function_call_arguments.done") {
           const fn = fns[realtimeEvent.name];
           if (fn !== undefined) {
@@ -468,7 +516,7 @@ function App() {
     const event = {
       type: "session.update",
       session: {
-        instructions: "あなたはとても優秀なAIアシスタントです。会話内容に対して、非常にナチュラルな返事をします。",
+        instructions: "あなたは高齢者向けの親しみやすい会話パートナーです。 以下の特徴を持って会話してください： - 話し方：丁寧で親しみやすく、ゆっくりとした口調 - 性格：優しく、聞き上手で、励ましが上手 - 知識：昭和の文化や歴史に詳しく、懐かしい話題を提供 - 目的：楽しい会話を通じて認知機能を刺激し、心の支えとなる",
         modalities: ['text', 'audio'],
         tools: [
           {
@@ -532,9 +580,13 @@ function App() {
     recordedChunksRef.current = [];
     recordingStartTimeRef.current = null;
     sessionIdRef.current = null;
+    aiSpeechEndTimeRef.current = null;
     
     setSessionActive(false);
     setIsRecording(false);
+    setCurrentTranscript('');
+    setConversationHistory([]);
+    setResponseTimings([]);
     logMessage("Session closed.");
   }, []);
 
@@ -567,6 +619,113 @@ function App() {
         <div>
           <button onClick={stopSession}>Close Session</button>
           {isRecording && <span className="recording-indicator"> 🎤 Recording...</span>}
+        </div>
+      )}
+      
+      {/* ターンアラウンドタイム統計 */}
+      {sessionActive && responseTimings.length > 0 && (
+        <div className="response-stats">
+          <h3>ターンアラウンドタイム統計</h3>
+          <p style={{ fontSize: '0.9em', color: '#666', marginBottom: '10px' }}>
+            ※ AIが話し終わってからユーザーが話し始めるまでの時間
+          </p>
+          <div style={{ 
+            backgroundColor: '#f5f5f5', 
+            padding: '10px', 
+            borderRadius: '8px',
+            marginBottom: '20px'
+          }}>
+            <div>
+              <strong>平均ターンアラウンドタイム:</strong> {
+                (responseTimings.reduce((sum, timing) => sum + timing.turnAroundTimeMs, 0) / responseTimings.length / 1000).toFixed(2)
+              }秒
+            </div>
+            <div>
+              <strong>最短ターンアラウンドタイム:</strong> {
+                (Math.min(...responseTimings.map(timing => timing.turnAroundTimeMs)) / 1000).toFixed(2)
+              }秒
+            </div>
+            <div>
+              <strong>最長ターンアラウンドタイム:</strong> {
+                (Math.max(...responseTimings.map(timing => timing.turnAroundTimeMs)) / 1000).toFixed(2)
+              }秒
+            </div>
+            <div>
+              <strong>測定回数:</strong> {responseTimings.length}回
+            </div>
+          </div>
+          
+          <h4>詳細履歴</h4>
+          <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
+            {responseTimings.map((timing, index) => (
+              <div 
+                key={index}
+                style={{
+                  padding: '5px 10px',
+                  margin: '2px 0',
+                  backgroundColor: timing.turnAroundTimeMs < 2000 ? '#e8f5e8' : 
+                                    timing.turnAroundTimeMs < 5000 ? '#fff3cd' : '#f8d7da',
+                  borderRadius: '4px',
+                  fontSize: '0.9em'
+                }}
+              >
+                <span style={{ fontWeight: 'bold' }}>{timing.timestamp}</span>: 
+                {timing.turnAroundTimeSec}秒
+                {timing.turnAroundTimeMs < 2000 && ' 🚀'}
+                {timing.turnAroundTimeMs >= 5000 && ' 🐌'}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
+      {/* 会話履歴とリアルタイムテキスト表示 */}
+      {sessionActive && (
+        <div className="conversation-container">
+          <h3>会話履歴</h3>
+          <div className="conversation-history">
+            {conversationHistory.map((message, index) => (
+              <div 
+                key={index} 
+                className={`message ${message.role}`}
+                style={{
+                  margin: '10px 0',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  backgroundColor: message.role === 'assistant' ? '#e3f2fd' : '#f3e5f5'
+                }}
+              >
+                <div style={{ fontWeight: 'bold', fontSize: '0.9em', color: '#666' }}>
+                  {message.role === 'assistant' ? 'AI' : 'ユーザー'} - {message.timestamp}
+                </div>
+                <div style={{ marginTop: '5px' }}>
+                  {message.content}
+                </div>
+              </div>
+            ))}
+            
+            {/* リアルタイムテキスト表示 */}
+            {currentTranscript && (
+              <div 
+                className="message assistant current"
+                style={{
+                  margin: '10px 0',
+                  padding: '10px',
+                  borderRadius: '8px',
+                  backgroundColor: '#e8f5e8',
+                  border: '2px dashed #4caf50'
+                }}
+              >
+                <div style={{ fontWeight: 'bold', fontSize: '0.9em', color: '#666' }}>
+                  AI (入力中...)
+                </div>
+                <div style={{ marginTop: '5px' }}>
+                  {currentTranscript}
+                  <span className="typing-indicator">|</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
       

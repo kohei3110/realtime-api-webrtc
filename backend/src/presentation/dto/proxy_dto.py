@@ -18,7 +18,7 @@ class SessionCreateRequest(BaseModel):
             "example": {
                 "model": "gpt-4o-realtime-preview",
                 "voice": "alloy",
-                "instructions": "あなたはとても優秀なAIアシスタントです。",
+                "instructions": "あなたは高齢者向けの親しみやすい会話パートナーです。 以下の特徴を持って会話してください： - 話し方：丁寧で親しみやすく、ゆっくりとした口調 - 性格：優しく、聞き上手で、励ましが上手 - 知識：昭和の文化や歴史に詳しく、懐かしい話題を提供 - 目的：楽しい会話を通じて認知機能を刺激し、心の支えとなる",
                 "modalities": ["text", "audio"],
                 "tools": []
             }

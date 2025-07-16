@@ -11,6 +11,8 @@ Azure OpenAI Realtime APIを利用したリアルタイム音声通信Webアプ�
 - **音声録音・保存**: MediaRecorder APIによるリアルタイム音声録音とBlob Storage保存
 - **関数呼び出し**: AI応答による動的なWebページ操作
 - **リアルタイムログ**: セッションの詳細な状態表示とデバッグ情報
+- **会話応答速度計測**: AIの発話完了からユーザー発話開始までの反応時間測定・統計表示
+- **リアルタイムテキスト表示**: AI応答の音声と同期したテキスト表示
 - **環境設定管理**: 設定可能な環境変数による柔軟な接続設定
 
 ### 1.3 技術スタック
@@ -62,8 +64,11 @@ src/
 - **セッション状態**: sessionActive (boolean)
 - **録音状態**: isRecording (boolean), recordingData (Blob)
 - **ログ管理**: logMessages (array)
+- **会話履歴**: conversationHistory (array), currentTranscript (string)
+- **応答時間**: responseTimings (array)
 - **WebRTC参照**: peerConnectionRef, dataChannelRef, audioElementRef
 - **録音参照**: mediaRecorderRef, recordedChunksRef
+- **タイミング参照**: avatarSpeechEndTimeRef
 
 ## 3. 機能仕様
 
@@ -407,6 +412,163 @@ if (missingVars.length > 0) {
 }
 ```
 
+### 3.7 会話応答速度計測機能
+
+#### 3.7.1 応答時間測定
+**機能概要**: AIの発話完了からユーザーの発話開始までの反応時間を自動測定
+
+**測定対象**:
+- **開始点**: `response.audio.done` イベント受信時（AI発話完了）
+- **終了点**: `input_audio_buffer.speech_started` イベント受信時（ユーザー発話開始）
+- **精度**: ミリ秒単位（`Date.now()`を使用）
+
+**計測データ構造**:
+```javascript
+const timingData = {
+  avatarEndTime: 1673123456789,    // AI発話完了時刻（Unix timestamp）
+  userStartTime: 1673123458234,    // ユーザー発話開始時刻（Unix timestamp）
+  responseTimeMs: 2445,            // 応答時間（ミリ秒）
+  responseTimeSec: "2.45",         // 応答時間（秒、表示用）
+  timestamp: "14:30:15"            // 記録時刻（HH:MM:SS）
+};
+```
+
+**イベントハンドリング**:
+```javascript
+// AI発話完了時
+if (realtimeEvent.type === "response.audio.done") {
+  avatarSpeechEndTimeRef.current = Date.now();
+}
+
+// ユーザー発話開始時
+if (realtimeEvent.type === "input_audio_buffer.speech_started") {
+  if (avatarSpeechEndTimeRef.current) {
+    const responseTime = Date.now() - avatarSpeechEndTimeRef.current;
+    // 統計データに追加
+    setResponseTimings(prev => [...prev, timingData]);
+  }
+}
+```
+
+#### 3.7.2 統計情報表示
+**機能概要**: 測定した応答時間の統計情報をリアルタイム表示
+
+**表示項目**:
+- **平均応答時間**: 全計測値の算術平均（秒）
+- **最短応答時間**: 最小値（秒）
+- **最長応答時間**: 最大値（秒）
+- **応答回数**: 計測されたターン数
+
+**統計計算**:
+```javascript
+const avgResponseTime = responseTimings.reduce((sum, timing) => 
+  sum + timing.responseTimeMs, 0) / responseTimings.length / 1000;
+
+const minResponseTime = Math.min(...responseTimings.map(timing => 
+  timing.responseTimeMs)) / 1000;
+
+const maxResponseTime = Math.max(...responseTimings.map(timing => 
+  timing.responseTimeMs)) / 1000;
+```
+
+#### 3.7.3 詳細履歴表示
+**機能概要**: 個別の応答時間を時系列で表示
+
+**表示形式**:
+- **時刻**: 記録された時刻（HH:MM:SS）
+- **応答時間**: 秒単位で小数点以下2桁まで
+- **パフォーマンス指標**: 視覚的フィードバック
+
+**パフォーマンス評価基準**:
+- 🚀 **優秀** (緑色): 2秒未満
+- **普通** (黄色): 2秒以上5秒未満  
+- 🐌 **要改善** (赤色): 5秒以上
+
+**UI実装**:
+```javascript
+<div style={{
+  backgroundColor: timing.responseTimeMs < 2000 ? '#e8f5e8' : 
+                   timing.responseTimeMs < 5000 ? '#fff3cd' : '#f8d7da',
+  // その他のスタイル...
+}}>
+  <span>{timing.timestamp}</span>: {timing.responseTimeSec}秒
+  {timing.responseTimeMs < 2000 && ' 🚀'}
+  {timing.responseTimeMs >= 5000 && ' 🐌'}
+</div>
+```
+
+#### 3.7.4 リアルタイムテキスト表示
+**機能概要**: AI応答の音声と同期したテキスト表示
+
+**実装機能**:
+- **リアルタイム更新**: `response.audio_transcript.delta` イベントによる逐次表示
+- **タイピングエフェクト**: 点滅カーソル表示
+- **完成時処理**: `response.audio_transcript.done` イベントで履歴に保存
+
+**状態管理**:
+```javascript
+const [currentTranscript, setCurrentTranscript] = useState('');
+const [conversationHistory, setConversationHistory] = useState([]);
+
+// リアルタイム更新
+if (realtimeEvent.type === "response.audio_transcript.delta") {
+  setCurrentTranscript(prev => prev + realtimeEvent.delta);
+}
+
+// 完成時処理
+if (realtimeEvent.type === "response.audio_transcript.done") {
+  setConversationHistory(prev => [...prev, {
+    role: 'assistant',
+    content: realtimeEvent.transcript,
+    timestamp: new Date().toLocaleTimeString()
+  }]);
+  setCurrentTranscript('');
+}
+```
+
+#### 3.7.5 高齢者向け最適化
+**設計理念**: 高齢者にとって使いやすい会話体験の実現
+
+**UXの考慮事項**:
+- **視認性**: 大きな文字、高コントラスト配色
+- **理解しやすさ**: 専門用語を避けた表示
+- **フィードバック**: 応答性の可視化による安心感の提供
+
+**評価基準**:
+- **理想的な応答時間**: 1-2秒（自然な会話のペース）
+- **許容範囲**: 3秒以内（ストレスを感じない範囲）
+- **改善必要**: 5秒以上（会話の自然さが損なわれる）
+
+### 3.8 リアルタイムテキスト表示機能
+
+#### 3.8.1 会話履歴管理
+**機能概要**: AI応答のテキストを会話履歴として保存・表示
+
+**データ構造**:
+```javascript
+const messageData = {
+  role: 'assistant',           // 発話者（'assistant' 固定）
+  content: 'こんにちは...',    // 発話内容
+  timestamp: '14:30:15'        // 発話時刻
+};
+```
+
+**表示仕様**:
+- **発話者表示**: 「AI」として表示
+- **時刻表示**: HH:MM:SS形式
+- **スタイリング**: AI応答は青系統の背景色
+
+#### 3.8.2 エラーハンドリング
+**対象エラー**:
+- 音声認識失敗時の対応
+- ネットワーク切断時のデータ保持
+- 不正なイベント受信時の処理
+
+**復旧処理**:
+- タイムアウト時の自動リセット
+- 状態の初期化処理
+- エラーメッセージの適切な表示
+
 ## 4. ユーザーインターフェース仕様
 
 ### 4.1 レイアウト構成
@@ -473,6 +635,83 @@ if (missingVars.length > 0) {
 - **マージン**: 5px 0
 - **改行**: 自動折り返し (word-break: break-word)
 - **空白**: 保持 (white-space: pre-wrap)
+
+#### 4.2.5 応答時間統計コンポーネント
+**表示条件**: セッション活性時かつ応答データ有り時のみ表示
+
+**デザイン仕様**:
+- **背景色**: #f9f9f9 (薄いグレー)
+- **ボーダー**: 1px solid #ddd
+- **角丸**: 10px
+- **パディング**: 15px
+- **マージン**: 20px 0
+
+**統計情報表示**:
+- **背景色**: #f5f5f5
+- **パディング**: 10px
+- **角丸**: 8px
+- **フォント**: 標準サイズ、太字（項目名）
+
+**詳細履歴表示**:
+- **最大高さ**: 200px
+- **オーバーフロー**: 縦スクロール
+- **項目マージン**: 2px 0
+- **項目パディング**: 5px 10px
+- **フォントサイズ**: 0.9em
+
+**パフォーマンス色分け**:
+- **優秀（2秒未満）**: #e8f5e8 (薄い緑) + 🚀
+- **普通（2-5秒）**: #fff3cd (薄い黄)
+- **要改善（5秒以上）**: #f8d7da (薄い赤) + 🐌
+
+#### 4.2.6 会話履歴コンポーネント
+**表示条件**: セッション活性時のみ表示
+
+**コンテナ仕様**:
+- **背景色**: #ffffff (白)
+- **ボーダー**: 1px solid #ddd
+- **角丸**: 8px
+- **パディング**: 15px
+- **最大高さ**: 400px
+- **オーバーフロー**: 縦スクロール
+
+**メッセージスタイル**:
+- **マージン**: 10px 0
+- **パディング**: 10px
+- **角丸**: 8px
+- **フォントサイズ**: 14px
+- **行間**: 1.4
+
+**AI応答メッセージ**:
+- **背景色**: #e3f2fd (薄い青)
+- **左ボーダー**: 4px solid #2196f3 (青)
+
+**リアルタイム表示（入力中）**:
+- **背景色**: #e8f5e8 (薄い緑)
+- **ボーダー**: 2px dashed #4caf50 (緑の点線)
+- **アニメーション**: fadeIn (0.3s ease-in)
+
+**タイピングインジケーター**:
+- **文字**: | (パイプ文字)
+- **アニメーション**: 1秒間隔の点滅
+- **色**: #4caf50 (緑)
+
+**ヘッダー情報**:
+- **フォント**: 太字
+- **フォントサイズ**: 0.9em
+- **色**: #666 (グレー)
+- **内容**: "AI - HH:MM:SS"
+
+#### 4.2.7 録音インジケーター
+**表示条件**: 録音中のみ表示
+
+**デザイン仕様**:
+- **色**: #ff4444 (赤)
+- **フォント**: 太字
+- **マージン**: 10px (左)
+- **アニメーション**: 1.5秒間隔のパルス効果
+
+**表示内容**: " 🎤 Recording..."
 
 ### 4.3 アクセシビリティ
 
@@ -579,6 +818,60 @@ REACT_APP_VOICE=alloy
 - データチャネルメッセージの最適化
 - 不要なログの削減
 - 接続プールの効果的な利用
+
+### 6.4 会話応答速度要件
+
+#### 6.4.1 パフォーマンス基準
+**測定対象**: AI発話完了からユーザー発話開始までの時間
+
+**品質基準**:
+- **🚀 優秀**: 2秒未満
+  - 自然な会話のペース
+  - 高齢者にとってストレスのない応答速度
+  - システムの理想的な動作状態
+
+- **普通**: 2秒以上5秒未満
+  - 許容範囲内の応答速度
+  - 軽微な遅延だが会話継続可能
+  - ネットワーク状況による一時的な遅延
+
+- **🐌 要改善**: 5秒以上
+  - 会話の自然さが損なわれる
+  - ユーザビリティの問題あり
+  - システム・ネットワークの最適化が必要
+
+#### 6.4.2 高齢者向けUX考慮事項
+**設計目標**:
+- **認知負荷の軽減**: 遅延による混乱を避ける
+- **安心感の提供**: 視覚的フィードバックによる状況把握
+- **継続的な改善**: 統計データによる品質向上
+
+**実装要件**:
+- リアルタイム応答時間表示
+- 統計情報の分かりやすい可視化
+- パフォーマンス悪化時の視覚的警告
+
+#### 6.4.3 技術的制約
+**計測精度**:
+- **タイムスタンプ精度**: ミリ秒単位（Date.now()使用）
+- **イベント依存性**: WebRTC DataChannelの安定性に依存
+- **ブラウザ差異**: 実装によるタイミング誤差の可能性
+
+**制限事項**:
+- ネットワーク遅延による影響
+- ブラウザのオーディオ処理遅延
+- デバイス性能による処理時間差異
+
+#### 6.4.4 データ保持・プライバシー
+**統計データ管理**:
+- **保存場所**: ブラウザメモリのみ（永続化なし）
+- **セッション範囲**: セッション終了時に自動削除
+- **プライバシー**: 個人識別情報の収集なし
+
+**データ活用**:
+- リアルタイム品質監視
+- システム性能の可視化
+- 開発・デバッグ用途の統計情報
 
 ## 7. エラーハンドリング
 
