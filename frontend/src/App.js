@@ -15,7 +15,7 @@ function App() {
   const recordedChunksRef = useRef([]);
   const recordingStartTimeRef = useRef(null);
   const sessionIdRef = useRef(null);
-  const avatarSpeechEndTimeRef = useRef(null);
+  const aiSpeechEndTimeRef = useRef(null);
   
   // Log environment variables for debugging
   useEffect(() => {
@@ -385,35 +385,35 @@ function App() {
             timestamp: new Date().toLocaleTimeString()
           }]);
           setCurrentTranscript(''); // リセット
-        } else if (realtimeEvent.type === "response.audio.done") {
-          // アバターの音声出力完了時刻を記録
-          avatarSpeechEndTimeRef.current = Date.now();
-          logMessage("🤖 アバターの発話が完了しました");
-          console.log("Avatar speech ended at:", new Date(avatarSpeechEndTimeRef.current).toISOString());
+        } else if (realtimeEvent.type === "output_audio_buffer.stopped") {
+          // AIの音声出力停止時刻を記録（実際に話し終わったタイミング）
+          aiSpeechEndTimeRef.current = Date.now();
+          logMessage("🤖 AIの発話が停止しました");
+          console.log("AI speech stopped at:", new Date(aiSpeechEndTimeRef.current).toISOString());
         } else if (realtimeEvent.type === "input_audio_buffer.speech_started") {
           logMessage("🎤 ユーザーが話し始めました");
           
-          // アバター発話完了からユーザー発話開始までの時間を計測
-          if (avatarSpeechEndTimeRef.current) {
+          // AI発話完了からユーザー発話開始までの時間を計測（ターンアラウンドタイム）
+          if (aiSpeechEndTimeRef.current) {
             const userSpeechStartTime = Date.now();
-            const responseTime = userSpeechStartTime - avatarSpeechEndTimeRef.current;
+            const turnAroundTime = userSpeechStartTime - aiSpeechEndTimeRef.current;
             
             const timingData = {
-              avatarEndTime: avatarSpeechEndTimeRef.current,
-              userStartTime: userSpeechStartTime,
-              responseTimeMs: responseTime,
-              responseTimeSec: (responseTime / 1000).toFixed(2),
+              aiSpeechEndTime: aiSpeechEndTimeRef.current,
+              userSpeechStartTime: userSpeechStartTime,
+              turnAroundTimeMs: turnAroundTime,
+              turnAroundTimeSec: (turnAroundTime / 1000).toFixed(2),
               timestamp: new Date().toLocaleTimeString()
             };
             
-            // 応答時間を状態に保存
+            // ターンアラウンドタイムを状態に保存
             setResponseTimings(prev => [...prev, timingData]);
             
-            logMessage(`⏱️ 応答時間: ${timingData.responseTimeSec}秒`);
-            console.log("Response timing data:", timingData);
+            logMessage(`⏱️ ターンアラウンドタイム: ${timingData.turnAroundTimeSec}秒`);
+            console.log("Turn-around timing data:", timingData);
             
-            // アバター発話完了時刻をリセット
-            avatarSpeechEndTimeRef.current = null;
+            // AI発話完了時刻をリセット
+            aiSpeechEndTimeRef.current = null;
           }
         } else if (realtimeEvent.type === "input_audio_buffer.speech_stopped") {
           logMessage("🎤 ユーザーが話し終わりました");
@@ -580,7 +580,7 @@ function App() {
     recordedChunksRef.current = [];
     recordingStartTimeRef.current = null;
     sessionIdRef.current = null;
-    avatarSpeechEndTimeRef.current = null;
+    aiSpeechEndTimeRef.current = null;
     
     setSessionActive(false);
     setIsRecording(false);
@@ -622,10 +622,13 @@ function App() {
         </div>
       )}
       
-      {/* 応答時間統計 */}
+      {/* ターンアラウンドタイム統計 */}
       {sessionActive && responseTimings.length > 0 && (
         <div className="response-stats">
-          <h3>応答時間統計</h3>
+          <h3>ターンアラウンドタイム統計</h3>
+          <p style={{ fontSize: '0.9em', color: '#666', marginBottom: '10px' }}>
+            ※ AIが話し終わってからユーザーが話し始めるまでの時間
+          </p>
           <div style={{ 
             backgroundColor: '#f5f5f5', 
             padding: '10px', 
@@ -633,22 +636,22 @@ function App() {
             marginBottom: '20px'
           }}>
             <div>
-              <strong>平均応答時間:</strong> {
-                (responseTimings.reduce((sum, timing) => sum + timing.responseTimeMs, 0) / responseTimings.length / 1000).toFixed(2)
+              <strong>平均ターンアラウンドタイム:</strong> {
+                (responseTimings.reduce((sum, timing) => sum + timing.turnAroundTimeMs, 0) / responseTimings.length / 1000).toFixed(2)
               }秒
             </div>
             <div>
-              <strong>最短応答時間:</strong> {
-                (Math.min(...responseTimings.map(timing => timing.responseTimeMs)) / 1000).toFixed(2)
+              <strong>最短ターンアラウンドタイム:</strong> {
+                (Math.min(...responseTimings.map(timing => timing.turnAroundTimeMs)) / 1000).toFixed(2)
               }秒
             </div>
             <div>
-              <strong>最長応答時間:</strong> {
-                (Math.max(...responseTimings.map(timing => timing.responseTimeMs)) / 1000).toFixed(2)
+              <strong>最長ターンアラウンドタイム:</strong> {
+                (Math.max(...responseTimings.map(timing => timing.turnAroundTimeMs)) / 1000).toFixed(2)
               }秒
             </div>
             <div>
-              <strong>応答回数:</strong> {responseTimings.length}回
+              <strong>測定回数:</strong> {responseTimings.length}回
             </div>
           </div>
           
@@ -660,16 +663,16 @@ function App() {
                 style={{
                   padding: '5px 10px',
                   margin: '2px 0',
-                  backgroundColor: timing.responseTimeMs < 2000 ? '#e8f5e8' : 
-                                    timing.responseTimeMs < 5000 ? '#fff3cd' : '#f8d7da',
+                  backgroundColor: timing.turnAroundTimeMs < 2000 ? '#e8f5e8' : 
+                                    timing.turnAroundTimeMs < 5000 ? '#fff3cd' : '#f8d7da',
                   borderRadius: '4px',
                   fontSize: '0.9em'
                 }}
               >
                 <span style={{ fontWeight: 'bold' }}>{timing.timestamp}</span>: 
-                {timing.responseTimeSec}秒
-                {timing.responseTimeMs < 2000 && ' 🚀'}
-                {timing.responseTimeMs >= 5000 && ' 🐌'}
+                {timing.turnAroundTimeSec}秒
+                {timing.turnAroundTimeMs < 2000 && ' 🚀'}
+                {timing.turnAroundTimeMs >= 5000 && ' 🐌'}
               </div>
             ))}
           </div>
